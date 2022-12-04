@@ -68,7 +68,8 @@ MBRLIST  CSECT
 * Job Management.
 *
 * Get storage for our dynamic allocation SVC 99 request
-         LA    R0,105
+STORSIZE EQU   120              120 bytes is a few more than we need
+         LA    R0,STORSIZE
          GETMAIN R,LV=(R0)      Get the storage necessary
          ST    R1,DYNAREA       Save the address to DYNAREA
 * ...and build the request block (RB)
@@ -84,7 +85,7 @@ MBRLIST  CSECT
          LA    R5,S99RB+RBLEN   Point 20 bytes beyond start of RB
          USING S99TUPL,R5       Addressability for text unit ptrs
          ST    R5,S99TXTPP      Init text points address in RB
-         LA    R6,S99TUPL+12    Point just past 3 text pointers
+         LA    R6,S99TUPL+16    Point just past 4 text pointers
          USING S99TUNIT,R6      Addressability for 1st text unit
 * Text Unit 1 - DDNAME (Set to 'DYNDCB')
          ST    R6,S99TUPTR      Point 1st TU ptr to 1st TU
@@ -110,18 +111,26 @@ MBRLIST  CSECT
          LA    R6,S99TUNIT+6+L'DYNDSN Point just past 2nd text unit
          LA    R5,S99TUPL+4     Point to the 3rd text unit ptr in list
          ST    R6,S99TUPTR      Point 3rd TU ptr to 3rd TU
-         OI    S99TUPTR,S99TUPLN Turn on high bit to indicate last ptr
          LA    R7,DALSTATS      Get the key for status specification
          STH   R7,S99TUKEY      Put the key in the text unit key field
          LA    R7,1             Set count = 1
          STH   R7,S99TUNUM      Set count = 1
          STH   R7,S99TULNG      Set length = 1
          MVI   S99TUPAR,X'08'   Set parm to SHR
+* Text Unit 4 - CLOSE - deallocate at close
+         LA    R6,S99TUNIT+7    Point just past 3rd text unit
+         LA    R5,S99TUPL+4     Point to the 4rd text unit ptr in list
+         ST    R6,S99TUPTR      Point 4rd TU ptr to 4rd TU
+         OI    S99TUPTR,S99TUPLN Turn on high bit to indicate last ptr
+         LA    R7,DALCLOSE      Get the key for status specification
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,0             Set count = 0
 * Done building dynamic allocation request
          DROP  R4,R5,R6,R8
          LR    R1,R8            Put request block ptr in R1
          DYNALLOC               Invoke DYNALLOC to process request
-         NOP   0
+         LTR   R15,R15          DYNALLOC return code
+         BNZ   SVC99ERR         ...was not successful
          OPEN  (DYNDCB,INPUT)
 * TODO: Should check that the open was successful
 *
@@ -176,50 +185,20 @@ LOOP01   XC    OUTREC(OUTLEN),OUTREC Clear output area
          BZ    LOOP             Zero bytes remaining in block?
          B     LOOP01           No, read the next entry in this block
 *
-WRITERR  WTO   'Unsuccessful CTC WRITE during MBLIST'
-*
-DIRDONE  CLOSE (DYNDCB)
-* Now we should deallocated our dynamic dataset allocation. We can
-* re-use the memory we got earlier and build our deallocation request.
-         L     R8,DYNAREA
-         USING S99RBP,R8        Addressability for RBPTR DSECT
-         LA    R4,S99RBPTR+4    Point 4 bytes beyond start of RBPTR
-         USING S99RB,R4         Addressability for RB DSECT
-         ST    R4,S99RBPTR      Point RBPTR to RB
-         OI    S99RBPTR,S99RBPND Turn on the high order bit in RBPTR
-         XC    S99RB(RBLEN),S99RB Zero out RB
-         MVI   S99RBLN,RBLEN    Put the length of RB in its length fld
-         MVI   S99VERB,S99VRBUN Set verb to unallocation function
-         LA    R5,S99RB+RBLEN   Point 20 bytes beyond start of RB
-         USING S99TUPL,R5       Addressability for text unit ptrs
-         ST    R5,S99TXTPP      Init text points address in RB
-         LA    R6,S99TUPL+4     Point just past 1 text pointer
-         USING S99TUNIT,R6      Addressability for 1st text unit
-* Text Unit 1 - DDNAME (Set to 'DYNDCB')
-         ST    R6,S99TUPTR      Point 1st TU ptr to 1st TU
-         OI    S99TUPTR,S99TUPLN Turn on high bit to indicate last ptr
-         LA    R7,DALDDNAM      Get the key for DDNAME
-         STH   R7,S99TUKEY      Put the key in the text unit key field
-         LA    R7,1             Set count = 1
-         STH   R7,S99TUNUM      Set count = 1
-         LA    R7,6             Out DDNAME is 'DYNDCB'
-         STH   R7,S99TULNG      ...and put it in the TU length field
-         MVC   S99TUPAR(6),DDNAME Put the DDNAME into parm fld
-* Done building dynamic unallocation request
-         DROP  R4,R5,R6,R8
-         LR    R1,R8            Put request block ptr in R1
-         DYNALLOC               Invoke DYNALLOC to process request
-         LA    R0,105
-         L     R2,DYNAREA
-         FREEMAIN R,LV=(R0),A=(R2) Free our storage
-         B     QUIT
 * Handle various errors and send unsuccessful result code
 BADLEN   LA    R9,X'F0'         Invalid DS length = 0xF0
+         LA    R8,0             No need to free memory
          B     SENDERR
 LOCERR   ST    R15,RESPCOD2     Move the LOCATE/OBTAIN result RESPCOD2
          LA    R9,X'F1'         Dataset locate error = 0xF1
+         LA    R8,0             No need to free memory
          B     SENDERR
 NONPDS   LA    R9,X'F2'         Requested DS is not a PDS
+         LA    R8,0             No need to free memory
+         B     SENDERR
+SVC99ERR LA    R9,X'F3'         Dynamic allocation error
+         LA    R8,1             Need to free memory
+         WTO   'Unsuccessful DYNALLOC during MBLIST'
          B     SENDERR
 SENDERR  ST    R9,RESPCODE      Save the result code to RESPONSE
          LA    R9,DSRCCW1       Load address of DSRCCW1 to R9
@@ -230,7 +209,17 @@ SENDERR  ST    R9,RESPCODE      Save the result code to RESPONSE
          EXCP  IOB              Run our WRITE command
          WAIT  ECB=EXCPECB
          CLI   EXCPECB,X'7F'    Successful completion?
-         BNE   WRITERR          ...No, bail out
+         BE    AFTERERR         ...Yes, we can quit
+         WTO   'Unsuccessful CTC WRITE during MBLIST error write'
+         B     AFTERERR
+AFTERERR LTR   R8,R8            Do we need to free memory?
+         BZ    QUIT             ...No, we can quit
+         B     DIRDONE          ...Yes, clean up
+WRITERR  WTO   'Unsuccessful CTC WRITE during MBLIST'
+DIRDONE  CLOSE (DYNDCB)
+         LA    R0,STORSIZE
+         L     R2,DYNAREA
+         FREEMAIN R,LV=(R0),A=(R2) Free our storage
 * Return to caller
 QUIT     L     R13,4(R13)       Restore address of caller's save area
          LM    R14,R12,12(R13)  Restore caller's registers
