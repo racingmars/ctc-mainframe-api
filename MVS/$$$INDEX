@@ -1,0 +1,7 @@
+$$$INDEX - This index of members.
+$BUILD   - (jcl) Procedures to build and link the program.
+$DEBUG   - (jcl) Procedure to run the program under MVS DDT debugger.
+$RUN     - (jcl) Procedure to run the program.
+CTCSERV  - (asm) Main program entry point.
+DSLIST   - (asm) DSLIST (cmd 0x01) implementation.
+MBRLIST  - (asm) MBRLIST (cmd0x02) implementation.

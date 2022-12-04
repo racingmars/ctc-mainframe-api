@@ -1,0 +1,221 @@
+***********************************************************************
+* MVS SERVICES OVER CTC - DSLIST Command (0x01)                       *
+*                                                                     *
+* Copyright 2022 Matthew R. Wilson <mwilson@mattwilson.org>           *
+*                                                                     *
+* This file is part of CTC Mainframe API. CTC Mainframe API is free   *
+* software: you can redistribute it and/or modify it under the terms  *
+* of the GNU General Public License as published by the Free Software *
+* Foundation, either version 3 of the license, or (at your option)    *
+* any later version.                                                  *
+***********************************************************************
+*
+         PRINT GEN
+DSLIST   CSECT
+         SAVE  (14,12),,*       Save caller's registers
+         BALR  R12,0            Load current address
+         USING *,R12            Establish addressability
+         ST    R13,SAVEAREA+4   Store caller's savearea address
+         LA    R13,SAVEAREA     Load address of our savearea
+**********************************************************************
+* COMMAND: DSLIST (0x01)                                             *
+* Command parameter will be the base name to search the catalog for. *
+**********************************************************************
+DSLSTCMD ORG   *
+* Copy parameter list addresses
+         MVC   CTCCMDAD,0(R1)   Address of CTCCMD DCB
+         MVC   CTCDTAAD,4(R1)   Address of CTCDATA DCB
+         MVC   CMDINAD,8(R1)    Address of command input data
+         L     R2,CMDINAD
+         L     R1,0(,R2)        Get command parameter length
+         N     R1,CMDLNMSK      Mask out the command param length
+         SRL   R1,8             Shift right 8 bits
+         STC   R1,LOCLEN        Set the locate name length
+         MVC   LOCNAME,3(R2)    Move the parameter into locate name
+*        Locate DSNAME
+         XC    CTGPL(CTGPLLEN),CTGPL     Zero data in CTGPL
+         MVI   CTGOPTN1,CTGNAME+CTGGENLD Set up LOCATE options
+         MVI   CTGOPTN3,CTGSUPLT+CTGAM0  Set up LOCATE options
+         LA    R0,LOCLEN        Set our LOCLEN + LOCNAME as the...
+         ST    R0,CTGENT        ...CATALOG entry point address
+         L     R0,=A(X'FFFF')   Get 64k work area
+         GETMAIN RU,LV=(R0)
+         ST    R1,CTGWKA        Save allocated memory addr to CTGPL
+         STH   R0,0(,R1)        Store save area size into work area hdr
+         LA    R0,0             R0 = 0
+         STH   R0,2(,R1)        Store save area used into work area hdr
+         CATALOG CTGPL
+*        Process result
+         ST    R15,DSRRSLT      Store result code
+         LA    R0,0             Initialize number of results...
+         STH   R0,DSRLEN        ...to 0
+         NR    R15,R15          Is result code 0?
+         BNZ   DSLNORES         ...no, go straight to response WRITE
+*        Calculate number of datasets names we got
+         L     R2,CTGWKA        Get address of work area
+         LA    R3,2             Need to add two bytes to it
+         AR    R2,R3            R2 = R2 + R3
+         LH    R0,0(,R2)        Second halfword of workarea is len
+         LA    R3,4             R3 = 4
+         SR    R0,R3            Subtract header length of 4
+         SRDA  R0,32            R0:R1 is now doubleword length value
+         LA    R3,45            R3 = 45 (length of each dsname entry)
+         DR    R0,R3            R1 = R0:R1 / 45 = # of name entries
+         STH   R1,DSRLEN        Set DSRLEN to the # of entries
+         B     DSLSTWRI
+DSLNORES ORG   *
+DSLSTWRI ORG   *                Write the response over the CTCA
+         LA    R1,DSRCCW1       Load address of DSRCCW1 to R1
+         ST    R1,IOBCCWAD      Point our IOB to our WRITE CCW
+         L     R1,CTCDTAAD      Load address of CTCDATA DCB to R1
+         ST    R1,IOBDCBAD      Point our IOB to our DCB
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   DSLSTERR         ...No, bail out
+*        Loop over result rows and send
+         LA    R1,DSRCCW2       Load address of DSRCCW2 to R1
+         ST    R1,IOBCCWAD      Point our IOB to our WRITE CCW
+         LA    R2,45            R2 = entry size
+         L     R3,CTGWKA        R3 = offset into WORKAREA entry
+         LA    R0,4
+         AR    R3,R0            R3 = R3 + 4; move past workarea header
+         LH    R4,DSRLEN        R4 = # of entries remaining to send
+         LTR   R4,R4            LH doesn't set condition code, so LTR
+         BZ    DSLSTDON         If there are no entries, we're done
+         LA    R5,DSLSTLP       R5 = address of DSLIST Loop location
+DSLSTLP  XC    DSRENT(DSRENTLN),DSRENT Clear output entry
+         MVC   DSRENT(45),0(R3) Copy current work area entry to DSRENT
+         MVC   LOCNAME,1(R3)    Copy current DSNAME to LOCNAME
+         LOCATE LOCCMLST        LOCATE the dataset name in the catalog
+         LTR   R15,R15          Success?
+         BNZ   DSRSND           ...no, just skip to sending this record
+         MVC   DSRVOL,LOCWRK+6  Copy 1st volume serial #
+         MVC   OBTVOLSR,DSRVOL  And copy it to our OBTAIN command
+         OBTAIN OBTCMLST        Get the DSBC for the dataset
+         LTR   R15,R15          Successful completion?
+         BNZ   DSRSND           ...no, just skip to sending this record
+         MVC   DSRDSCB,DSCBAREA Copy the DSCB data to output record
+DSRSND   XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNZ   DSLSTERR         ...No, bail out
+         AR    R3,R2            Update offset into work area to next
+         BCTR  R4,R5            Decrement R4; if non-zero loop
+         B     DSLSTDON         Zero entries left - all done
+DSLSTERR WTO   'Unsuccessful CTC WRITE during DSLSTCMD'
+DSLSTDON ORG   *                Finish DSLIST processing
+         L     R0,=A(X'FFFF')   Release 64k work area
+         L     R1,CTGWKA
+         FREEMAIN R,LV=(R0),A=(R1)
+* Return to caller
+QUIT     L     R13,SAVEAREA+4   Restore address of caller's save area
+         RETURN (14,12),RC=0
+*
+**********************************************************************
+**********************************************************************
+*
+***** Parameters passed into us
+CTCCMDAD DS    F
+CTCDTAAD DS    F
+CMDINAD  DS    F
+***** Storage and CCWs for DSLIST command
+* Initial response
+DSRRESP  DS    0F
+DSRRSLT  DS    F
+DSRLEN   DS    H
+DSRRESPL EQU   *-DSRRESP
+* DSLIST entry record
+DSRENT   DS    0F
+DSRTYPE  DS    C
+DSRNAME  DS    CL44
+DSRVOL   DS    CL6
+DSRDSCB  DS    CL96
+DSRENTLN EQU   *-DSRENT
+* Channel programs
+DSRCCW1  CCW   CONTROL,DSRRESP,SLI+CC,1
+         CCW   WRITE,DSRRESP,SLI,DSRRESPL
+DSRCCW2  CCW   WRITE,DSRENT,SLI,DSRENTLN
+WRITE    EQU   X'01'
+READ     EQU   X'02'
+CONTROL  EQU   X'07'
+SENSE    EQU   X'14'
+SLI      EQU   X'20'
+CC       EQU   X'40'
+* EXCP IOB
+IOB      DS    0F
+IOBFLAGS DC    XL2'0000'
+IOBSENSE DC    XL2'0000'
+IOBECBAD DC    A(EXCPECB)
+IOBCSW   DC    A(0)
+IOBCSWFL DC    XL2'0000'
+IOBRESDL DC    H'00'
+IOBCCWAD DC    A(0)
+IOBDCBAD DC    A(0)
+         DC    F'0'
+         DC    F'0'
+SLPTIM   DC    F'25'
+EXCPECB  DS    F
+* Utility variables
+         DS    0F
+CMDLNMSK DC    X'00FFFF00'      Mask to get the param length
+***********************************************************************
+* CATALOG PARAMETER LIST                                              *
+*                                                                     *
+* This is just enough of the definition of CTGPL from the IEZCTGPL    *
+* macro from, e.g., the MVS 3.8J Optional Materials Tape SYM6-1, that *
+* we need to perform a catalog generic locate operation. For full     *
+* details on our undocumented-by-IBM use of SVC 26, see Peter         *
+* Sawyer's materials on CBT689.                                       *
+***********************************************************************
+CTGPL    DS    0D
+CTGOPTN1 DS    XL1                      FIRST OPTION INDICATOR
+CTGNAME  EQU   X'04'                    1 - 44-BYTE NAME OR VOLSER
+CTGGENLD EQU   X'01'                    GENERIC LOCATE REQUEST
+CTGOPTN2 DS    XL1                      SECOND OPTION INDICATOR
+CTGOPTN3 DS    XL1                      THIRD OPTION INDICATOR
+CTGSUPLT EQU   X'10'                    SUPER LOCATE
+CTGAM0   EQU   X'01'                    VSAM REQ VERSUS NONVSAM
+CTGOPTN4 DS    XL1                      FOURTH OPTION INDICATOR
+CTGENT   DS    A                        USER ENTRY ADDRESS
+         DS    A
+CTGWKA   DS    A                        WORKAREA ADDRESS
+         DS    XL12
+CTGPLLEN EQU   *-CTGPL
+***********************************************************************
+* Parameters for our CTGPL                                            *
+***********************************************************************
+LOCLEN   DS    XL1
+LOCNAME  DS    CL44
+* And for our LOCATE and OBTAIN calls
+LOCCMLST CAMLST NAME,LOCNAME,,LOCWRK
+LOCWRK   DS    0D
+         DS    265C
+OBTCMLST CAMLST SEARCH,LOCNAME,OBTVOLSR,DSCBAREA
+OBTVOLSR DS    CL6
+DSCBAREA DS    0D
+         DS    CL140
+***********************************************************************
+SAVEAREA DS    18F
+**********************************************************************
+* Register symbols                                                   *
+**********************************************************************
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END   DSLIST

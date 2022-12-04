@@ -1,0 +1,141 @@
+***********************************************************************
+* MVS SERVICES OVER CTC - MAIN ENTRY POINT                            *
+*                                                                     *
+* Copyright 2022 Matthew R. Wilson <mwilson@mattwilson.org>           *
+*                                                                     *
+* This file is part of CTC Mainframe API. CTC Mainframe API is free   *
+* software: you can redistribute it and/or modify it under the terms  *
+* of the GNU General Public License as published by the Free Software *
+* Foundation, either version 3 of the license, or (at your option)    *
+* any later version.                                                  *
+***********************************************************************
+*
+         PRINT GEN
+CTCSERV  CSECT
+         SAVE  (14,12),,*       Save caller's registers
+         BALR  R12,0            Load current address
+         USING *,R12            Establish addressability
+         ST    R13,SAVEAREA+4   Store caller's savearea address
+         LA    R13,SAVEAREA     Load address of our savearea
+         OPEN  (CTCCMD)
+         OPEN  (CTCDATA)
+***
+*** SENSLOOP is the main loop -- we issue a SENSE command against the
+***          CTC adapter to read the command byte of the other side of
+***          the connection. If we get back a CONTROL byte, that is the
+***          other side's indication to us that there is data ready to
+***          by sent to us. Our SENSE will clear the other side's
+***          CONTROL command, and then it will perform a WRITE which we
+***          will be READ. After READing, we return back to SENSLOOP to
+***          wait for the next CONTROL command to arrive.
+***
+SENSLOOP ORG   *
+         LA    R1,CCWSENSE      Load address of CCWSENSE to R1
+         ST    R1,IOBCCWAD      Point our IOB to our SENSE CCW
+         LA    R1,CTCCMD        Load address of the CMD DCB to R1
+         ST    R1,IOBDCBAD      Point our IOB to our DCB
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run the SENSE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   BADSENSE
+         CLI   INREC,CONTROL    Did we sense a CONTROL command?
+         BNE   SLEEP            No, sleep and retry
+         LA    R1,CCWRDCMD      Load address of CCWRDCMD to R1
+         ST    R1,IOBCCWAD      Point our IOB to our READ CCW
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run the READ command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful complete?
+         BNE   BADREAD          No, report the error and quit
+CHK01    CLI   CMDOPCD,X'01'    Did we receive the DSLIST command?
+         BNE   CHK02            No, go on to next check
+         CALL  DSLIST,(CTCCMD,CTCDATA,CMDIN)  Yes, do it
+         B     SENSLOOP
+CHK02    CLI   CMDOPCD,X'02'    Did we receive the MBRLIST command?
+         BNE   CHKFF            No, go on to next check
+         CALL  MBRLIST,(CTCCMD,CTCDATA,CMDIN)  Yes, do it
+         B     SENSLOOP
+CHKFF    CLI   CMDOPCD,X'FF'    Did we receive the quit command?
+         BE    QUITCMD          Yes
+*        TODO: Send an "unknown command" response to reset client
+         WTO   'CTCSERV: Unknown command received'
+         B     SENSLOOP
+BADSENSE WTO   'CTCSERV: SENSE failed-didn''t receive 7F'
+         B     FINISH
+SLEEP    STIMER WAIT,BINTVL=SLPTIM Sleep for 250ms
+         B     SENSLOOP            ...then retry sense
+BADREAD  WTO   'SNS: READ failed: didn''t receive 7F'
+         B FINISH
+**********************************************************************
+* COMMAND: QUIT (0xFF)                                               *
+* No parameters.                                                     *
+**********************************************************************
+QUITCMD  B FINISH
+**********************************************************************
+FINISH   CLOSE (CTCCMD)
+         CLOSE (CTCDATA)
+* Return to caller
+QUIT     L     R13,SAVEAREA+4   Restore address of caller's save area
+         RETURN (14,12),RC=0
+*
+**********************************************************************
+**********************************************************************
+*
+***** Main Loop Channel Programs
+CCWRDCMD CCW   READ,CMDIN,SLI,CMDINLEN
+CCWSENSE CCW   SENSE,INREC,SLI,1
+WRITE    EQU   X'01'
+READ     EQU   X'02'
+CONTROL  EQU   X'07'
+SENSE    EQU   X'14'
+SLI      EQU   X'20'
+CC       EQU   X'40'
+* EXCP IOB
+IOB      DS    0F
+IOBFLAGS DC    XL2'0000'
+IOBSENSE DC    XL2'0000'
+IOBECBAD DC    A(EXCPECB)
+IOBCSW   DC    A(0)
+IOBCSWFL DC    XL2'0000'
+IOBRESDL DC    H'00'
+IOBCCWAD DC    A(CCWRDCMD)
+IOBDCBAD DC    A(CTCCMD)
+         DC    F'0'
+         DC    F'0'
+SLPTIM   DC    F'25'
+EXCPECB  DS    F
+INREC    DS    CL5
+***** Input command area
+CMDIN    DS    0F
+CMDOPCD  DS    C
+CMDPLEN  DS    XL2
+CMDPARM  DS    CL255
+CMDINLEN EQU   *-CMDIN
+         DS    0F
+***********************************************************************
+SAVEAREA DS    18F
+CTCCMD   DCB   DDNAME=CTCCMD,MACRF=(E),DEVD=DA
+CTCDATA  DCB   DDNAME=CTCDATA,MACRF=(E),DEVD=DA
+SYSPRINT DCB   DSORG=PS,MACRF=PM,DDNAME=SYSPRINT,                      +
+               BLKSIZE=132,LRECL=132,RECFM=F
+**********************************************************************
+* Register symbols                                                   *
+**********************************************************************
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END   CTCSERV
