@@ -27,7 +27,7 @@ service.
 
 ### Dataset list
 
-`GET /dslist/<prefix>`
+`GET /api/dslist/<prefix>`
 
 The dataset list will search the catalog for all datasets that begin with
 `<prefix>` and return basic information about them. If the prefix is a single
@@ -37,17 +37,26 @@ just the `FOO` alias entry in the catalog.
 
 ### PDS member list
 
-`GET /mbrlist/<pds>`
+`GET /api/mbrlist/<pds>`
 
 If `<pds>` is a partitioned dataset, the member list API will return the list
 of member names.
 
+### Quit
+
+`GET /api/quit`
+
+Calling this API will stop the job running the CTC service on the MVS side. To
+prevent CTC device syncronization problems, you should not make further API
+calls to the web service until the CTC server job is started on the MVS side
+again.
+
 ## Limitations and security
 
-No security is implemented at all on either the web service side or the MVS
-service side. Anyone who has access to the web service, or directly to the
-emulated CTC device ports on your Hercules instance, will be able to make full
-use of the services.
+**Security: there is none**. No security is implemented at all on either the
+web service side or the MVS service side. Anyone who has access to the web
+service, or directly to the emulated CTC device ports on your Hercules
+instance, will be able to make full use of the services.
 
 I have not tested this on an MVS system with RAKF (or, for that matter, RACF)
 installed. A security product may limit the actions the service can take to

@@ -1,0 +1,10 @@
+{
+    "listen_port": 8370,
+    "hercules_host": "127.0.0.1",
+    "hercules_v313": false,
+    "hercules_host_bigendian": false,
+    "cmd_local_port": 15600,
+    "cmd_remote_port": 15620,
+    "data_local_port": 15610,
+    "data_remote_port": 15630
+}

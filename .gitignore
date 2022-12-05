@@ -1,0 +1,4 @@
+*.exe
+ctcserver/ctcserver
+ctcserver/config.json
+
