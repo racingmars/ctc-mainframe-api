@@ -50,19 +50,28 @@ SENSLOOP ORG   *
          BNE   BADREAD          No, report the error and quit
 CHK01    CLI   CMDOPCD,X'01'    Did we receive the DSLIST command?
          BNE   CHK02            No, go on to next check
-         CALL  DSLIST,(CTCCMD,CTCDATA,CMDIN)  Yes, do it
+         CALL  DSLIST,(CTCCMD,CTCDATA,CMDIN)   Yes, do it
          B     SENSLOOP
 CHK02    CLI   CMDOPCD,X'02'    Did we receive the MBRLIST command?
-         BNE   CHKFF            No, go on to next check
+         BNE   CHK03            No, go on to next check
          CALL  MBRLIST,(CTCCMD,CTCDATA,CMDIN)  Yes, do it
+         B     SENSLOOP
+CHK03    CLI   CMDOPCD,X'03'    Did we receive the READ command?
+         BNE   CHKFF            No, go on to next check
+         CALL  READ,(CTCCMD,CTCDATA,CMDIN)     Yes, do it
          B     SENSLOOP
 CHKFF    CLI   CMDOPCD,X'FF'    Did we receive the quit command?
          BE    QUITCMD          Yes
 *        TODO: Send an "unknown command" response to reset client
          WTO   'CTCSERV: Unknown command received'
          B     SENSLOOP
-BADSENSE WTO   'CTCSERV: SENSE failed-didn''t receive 7F'
-         B     FINISH
+* If we get an unsuccessful completion waiting for a SENSE, just try
+* closing the CTC devices to reset them and try again.
+BADSENSE CLOSE (CTCCMD)
+         CLOSE (CTCDATA)
+         OPEN  (CTCCMD)
+         OPEN  (CTCDATA)
+         B     SLEEP
 SLEEP    STIMER WAIT,BINTVL=SLPTIM Sleep for 250ms
          B     SENSLOOP            ...then retry sense
 BADREAD  WTO   'SNS: READ failed: didn''t receive 7F'

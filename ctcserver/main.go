@@ -17,10 +17,11 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/racingmars/ctc-mainframe-api/ctcserver/internal/ctc"
-	"github.com/racingmars/ctc-mainframe-api/ctcserver/internal/ctcapi"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/racingmars/ctc-mainframe-api/ctcserver/internal/ctc"
+	"github.com/racingmars/ctc-mainframe-api/ctcserver/internal/ctcapi"
 )
 
 func main() {
@@ -101,6 +102,7 @@ func realMain(configPath string) int {
 	// Add our API endpoints
 	e.GET("/api/dslist/:prefix", app.dslist)
 	e.GET("/api/mbrlist/:pdsName", app.mbrlist)
+	e.GET("/api/read/:dsn", app.read)
 	e.GET("/api/quit", app.quit)
 
 	// Run it

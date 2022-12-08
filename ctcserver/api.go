@@ -11,6 +11,7 @@ package main
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -47,6 +48,24 @@ func (app *api) mbrlist(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, results)
+}
+
+func (app *api) read(c echo.Context) error {
+	dsn := c.Param("dsn")
+
+	results, err := app.ctcapi.Read(dsn)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError,
+			errorResponse{Error: err.Error()})
+	}
+
+	var output strings.Builder
+	for _, record := range results {
+		output.WriteString(record)
+		output.WriteString("\n")
+	}
+
+	return c.String(http.StatusOK, output.String())
 }
 
 func (app *api) quit(c echo.Context) error {

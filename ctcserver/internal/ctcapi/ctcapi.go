@@ -22,6 +22,7 @@ import (
 type CTCAPI interface {
 	GetDSList(basename string) ([]DSInfo, error)
 	GetMemberList(pdsName string) ([]string, error)
+	Read(dsn string) ([]string, error)
 	Quit() error
 }
 
@@ -35,6 +36,7 @@ type opcode byte
 const (
 	opDSList  opcode = 0x01
 	opMbrList opcode = 0x02
+	opRead    opcode = 0x03
 	opQuit    opcode = 0xFF
 )
 

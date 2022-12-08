@@ -42,6 +42,18 @@ just the `FOO` alias entry in the catalog.
 If `<pds>` is a partitioned dataset, the member list API will return the list
 of member names.
 
+### Read dataset
+
+`GET /api/read/<dsn>`
+
+`<dsn>` is the name of a dataset you wish to read. The response body will be
+of type text/plain containing the ASCII-converted records with trailing spaces
+trimmed and a newline inserted after each record.
+
+Sequential datasets (e.g. `HLQ.DS1`) and members of partitioned datasets (e.g.
+`HLQ.DS2(MEMBER)`) are supported. However, only datasets with fixed record
+length (F or FB) are supported.
+
 ### Quit
 
 `GET /api/quit`
@@ -50,6 +62,26 @@ Calling this API will stop the job running the CTC service on the MVS side. To
 prevent CTC device syncronization problems, you should not make further API
 calls to the web service until the CTC server job is started on the MVS side
 again.
+
+## Example API usage
+
+The combination of the _PDF member list_ API and the _Read dataset_ API allow
+you to easily save all the members from a PDS to a local directory. For
+example, with the API service running on port 8370, I wish to retrieve all
+members of the partitioned dataset `MWILSON.CTCSERV` into a new directory to
+backup the source code for this project:
+
+```
+$ mkdir CTCSERV
+$ cd CTCSERV
+$ for x in $(curl -s http://127.0.0.1:8370/api/mbrlist/mwilson.ctcserv | jq -r '.[]')
+for>  do
+for>    curl -s -o "$x" "http://127.0.0.1:8370/api/read/mwilson.ctcserv($x)"
+for>  done
+$ ls
+'$$$INDEX'  '$BUILD'  '$COPYING'  '$DEBUG'  '$RUN'   CTCSERV   DSLIST   MBRLIST
+READ
+```
 
 ## Limitations and security
 

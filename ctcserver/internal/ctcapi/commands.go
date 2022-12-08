@@ -39,6 +39,11 @@ var dsnameRegex = regexp.MustCompile(
 	`^[a-zA-Z$#@-][a-zA-Z0-9$#@-]{0,7}` +
 		`(\.[a-zA-Z$#@-][a-zA-Z0-9$#@-]{0,7})*$`)
 
+var dsnameOptionalMemberRegex = regexp.MustCompile(
+	`^([a-zA-Z$#@-][a-zA-Z0-9$#@-]{0,7}` +
+		`(?:\.[a-zA-Z$#@-][a-zA-Z0-9$#@-]{0,7})*)` +
+		`(?:\(([a-zA-Z$#@-][a-zA-Z0-9$#@-]{1,8})\))?$`)
+
 func (c *ctcapi) GetDSList(basename string) ([]DSInfo, error) {
 	if len(basename) > 44 {
 		return nil, fmt.Errorf("dataset name too long; got %d characters "+
@@ -208,7 +213,7 @@ func (c *ctcapi) GetMemberList(pdsName string) ([]string, error) {
 			"but needs to be 44 or fewer", len(pdsName))
 	}
 
-	if !dsprefixRegex.MatchString(pdsName) {
+	if !dsnameRegex.MatchString(pdsName) {
 		return nil, fmt.Errorf("dataset name is invalid")
 	}
 
@@ -269,7 +274,7 @@ func (c *ctcapi) GetMemberList(pdsName string) ([]string, error) {
 	// Now send our READ command to indicate we've read the response
 	if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
 		log.Info().Err(err).Msgf(
-			"Get MemberList(): error sending READ after initial response")
+			"GetMemberList(): error sending READ after initial response")
 		return nil, err
 	}
 
@@ -311,6 +316,141 @@ func (c *ctcapi) GetMemberList(pdsName string) ([]string, error) {
 
 		name := strings.TrimRight(ctc.EtoS(data[0:8]), " ")
 		entries = append(entries, name)
+	}
+
+	return entries, nil
+}
+
+func (c *ctcapi) Read(dsn string) ([]string, error) {
+
+	if !dsnameOptionalMemberRegex.MatchString(dsn) {
+		return nil, fmt.Errorf("dataset name is invalid")
+	}
+
+	matches := dsnameOptionalMemberRegex.FindStringSubmatch(dsn)
+	pdsName := matches[1]
+	mbrName := matches[2]
+
+	if len(pdsName) > 44 {
+		return nil, fmt.Errorf("dataset name too long; got %d characters "+
+			"but needs to be 44 or fewer", len(pdsName))
+	}
+	if len(mbrName) > 8 {
+		return nil, fmt.Errorf("member name too long; got %d characters "+
+			"but needs to be 8 or fewer", len(mbrName))
+	}
+
+	// The dataset name must be 44 characters, padded with (EBCDIC) spaces.
+	pdsEbcdic := ctc.StoE(strings.ToUpper(pdsName))
+	pdsPadded := make([]byte, 44)
+	for i := range pdsPadded {
+		pdsPadded[i] = 0x40
+	}
+	copy(pdsPadded, pdsEbcdic)
+
+	// The member name must be 8 characters, padded with (EBCDIC) spaces.
+	mbrEbcdic := ctc.StoE(strings.ToUpper(mbrName))
+	mbrPadded := make([]byte, 8)
+	for i := range mbrPadded {
+		mbrPadded[i] = 0x40
+	}
+	copy(mbrPadded, mbrEbcdic)
+
+	c.ctcMutex.Lock()
+	defer c.ctcMutex.Unlock()
+
+	log.Debug().Hex("pds", pdsEbcdic).Msgf("reading dataset '%s'",
+		pdsName)
+	if len(mbrName) > 0 {
+		log.Debug().Hex("member", mbrEbcdic).Msgf("reading member '%s'",
+			mbrName)
+	}
+
+	// Complete input is the 44-byte DS name followed by 8-byte member
+	pdsPadded = append(pdsPadded, mbrPadded...)
+
+	if err := c.sendCommand(opRead, pdsPadded); err != nil {
+		log.Error().Err(err).Msg("sendCommand() error in ReadDS()")
+		return nil, err
+	}
+
+	// Wait for a CONTROL command
+	cmd, _, _, err := c.ctcdata.Read()
+	if err != nil {
+		log.Error().Err(err).Msg("error during ctcdata.Read() while " +
+			"awaiting CONTROL in ReadDS()")
+		return nil, err
+	}
+	if cmd != ctc.CTCCmdControl {
+		errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
+			"during ctcdata.Read(), got %02x", cmd)
+		log.Error().Msg(errmsg)
+		return nil, errors.New(errmsg)
+	}
+
+	// Send a SENSE command in response
+	if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
+		log.Error().Err(err).Msg(
+			"error trying to read SENSE from ctcdata in ReadDS()")
+		return nil, err
+	}
+
+	// Read the initial response
+	cmd, count, data, err := c.ctcdata.Read()
+	if err != nil {
+		log.Info().Err(err).Msgf(
+			"error during ctcdata.Read() in ReadDS()")
+		return nil, err
+	}
+	log.Debug().
+		Hex("command", []byte{byte(cmd)}).
+		Uint16("count", count).
+		Hex("data", data).
+		Msg("ReadDS(): initial response")
+
+	// Now send our READ command to indicate we've read the response
+	if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
+		log.Info().Err(err).Msgf(
+			"ReadDS(): error sending READ after initial response")
+		return nil, err
+	}
+
+	resultCode := binary.BigEndian.Uint32(data[0:4])
+	if resultCode != 0 {
+		additionalCode := binary.BigEndian.Uint32(data[4:8])
+		log.Info().Msgf("ReadDS(): unsuccessful result code: %02x/%02x",
+			resultCode, additionalCode)
+		return nil, fmt.Errorf("unsuccessful result code: %02x/%02x",
+			resultCode, additionalCode)
+	}
+
+	var entries []string
+	for {
+		// Read the entry
+		cmd, count, data, err := c.ctcdata.Read()
+		if err != nil {
+			log.Info().Err(err).Msg("ReadDS(): error reading entry")
+			return nil, err
+		}
+		log.Debug().
+			Hex("command", []byte{byte(cmd)}).
+			Uint16("count", count).
+			Hex("data", data).
+			Msg("ReadDS(): read entry")
+		// Now send our READ command to indicate we've read the response
+		if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
+			log.Error().Err(err).Msg(
+				"ReadDS(): error sending READ after reading entry")
+			return nil, err
+		}
+
+		if len(data) == 1 && data[0] == 0xFF {
+			// last record. Done
+			break
+		}
+
+		record := strings.TrimRight(ctc.EtoS(data), " ")
+		entries = append(entries, record)
 	}
 
 	return entries, nil
