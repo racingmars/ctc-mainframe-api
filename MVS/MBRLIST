@@ -72,6 +72,7 @@ STORSIZE EQU   120              120 bytes is a few more than we need
          LA    R0,STORSIZE
          GETMAIN R,LV=(R0)      Get the storage necessary
          ST    R1,DYNAREA       Save the address to DYNAREA
+         XC    0(STORSIZE,R1),0(R1) Zero out the memory
 * ...and build the request block (RB)
          LR    R8,R1            Save the address to R8
          USING S99RBP,R8        Addressability for RBPTR DSECT
