@@ -83,6 +83,16 @@ STORSIZE EQU   200              200 bytes is well more than we need
          LA    R0,STORSIZE
          GETMAIN R,LV=(R0)      Get the storage necessary
          ST    R1,DYNAREA       Save the address to DYNAREA
+* There's a complication: we've verified that the dataset exists, but
+* if the caller requested a member name in a PDS, we haven't verified
+* that the specific member exists. If we set up a dynamic allocation
+* request with a member name that doesn't exist, our program will abend
+* so we first need to check if the member name exists.
+         CLI   DYNMBR,C' '      Is member name empty?
+         BE    NOMBRCHK         ...yes, no member check needed
+*                               ...otherwise, we need to first allocate
+*                                  the PDS without a member name to
+*                                  check the directory
          XC    0(STORSIZE,R1),0(R1) Zero out the memory
 * ...and build the request block (RB)
          LR    R8,R1            Save the address to R8
@@ -105,7 +115,81 @@ STORSIZE EQU   200              200 bytes is well more than we need
          STH   R7,S99TUKEY      Put the key in the text unit key field
          LA    R7,1             Set count = 1
          STH   R7,S99TUNUM      Set count = 1
-         LA    R7,6             Out DDNAME is 'DYNDCB'
+         LA    R7,6             Our DDNAME is 'DYNDCB', so length = 6
+         STH   R7,S99TULNG      ...and put it in the TU length field
+         MVC   S99TUPAR(6),DDNAME Put the DDNAME into parm fld
+* Text Unit 2 - DSNAME
+         LA    R6,S99TUNIT+12   Point just past 1st text unit
+         LA    R5,S99TUPL+4     Point to the 2nd text unit ptr in list
+         ST    R6,S99TUPTR      Point 2nd TU ptr to 2nd TU
+         LA    R7,DALDSNAM      Get the key for DSNAME
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,1             Set count = 1
+         STH   R7,S99TUNUM      Set count = 1
+         LA    R7,L'DYNDSN      Load length
+         STH   R7,S99TULNG      ...and put it in the TU length field
+         MVC   S99TUPAR(L'DYNDSN),DYNDSN Put the DSNAME into parm fld
+* Text Unit 3 - STATUS (set to SHR)
+         LA    R6,S99TUNIT+6+L'DYNDSN Point just past 2nd text unit
+         LA    R5,S99TUPL+4     Point to the 3rd text unit ptr in list
+         ST    R6,S99TUPTR      Point 3rd TU ptr to 3rd TU
+         LA    R7,DALSTATS      Get the key for status specification
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,1             Set count = 1
+         STH   R7,S99TUNUM      Set count = 1
+         STH   R7,S99TULNG      Set length = 1
+         MVI   S99TUPAR,X'08'   Set parm to SHR
+* Text Unit 4 - CLOSE - deallocate at close
+         LA    R6,S99TUNIT+7    Point just past 3rd text unit
+         LA    R5,S99TUPL+4     Point to the 4rd text unit ptr in list
+         ST    R6,S99TUPTR      Point 4rd TU ptr to 4rd TU
+         LA    R7,DALCLOSE      Get the key for status specification
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,0             Set count = 0
+         STH   R7,S99TUNUM      Set count = 0
+         OI    S99TUPTR,S99TUPLN Turn on high bit to indicate last ptr
+* Done building dynamic allocation request
+         DROP  R4,R5,R6,R8
+         LR    R1,R8            Put request block ptr in R1
+         DYNALLOC               Invoke DYNALLOC to process request
+         LTR   R15,R15          DYNALLOC return code
+         BNZ   SVC99ERR         ...was not successful
+         OPEN  (DYNDCB,INPUT)
+         MVC   BLDLNAME,DYNMBR  Copy member name to our BLDL list
+         BLDL  DYNDCB,BLDLLIST  Build the directory entry list
+         LTR   R15,R15          Check return code
+         BZ    BLDLGOOD         Success: member must exists
+         CLOSE (DYNDCB)         Failed: member probably doesn't exist
+         B     MBRERROR         Bail out and report the error
+BLDLGOOD CLOSE (DYNDCB)         Close the DS to we can re-allocate
+*                               with the specific member name.
+* Either the member check has succeeded, or we're not trying to open
+* a PDS member, so we can now create our DYNALLOC request to open the
+* caller's requested dataset.
+NOMBRCHK L     R1,DYNAREA
+         XC    0(STORSIZE,R1),0(R1) Zero out the memory
+* ...and build the request block (RB)
+         LR    R8,R1            Save the address to R8
+         USING S99RBP,R8        Addressability for RBPTR DSECT
+         LA    R4,S99RBPTR+4    Point 4 bytes beyond start of RBPTR
+         USING S99RB,R4         Addressability for RB DSECT
+         ST    R4,S99RBPTR      Point RBPTR to RB
+         OI    S99RBPTR,S99RBPND Turn on the high order bit in RBPTR
+         XC    S99RB(RBLEN),S99RB Zero out RB
+         MVI   S99RBLN,RBLEN    Put the length of RB in its length fld
+         MVI   S99VERB,S99VRBAL Set verb to allocation function
+         LA    R5,S99RB+RBLEN   Point 20 bytes beyond start of RB
+         USING S99TUPL,R5       Addressability for text unit ptrs
+         ST    R5,S99TXTPP      Init text points address in RB
+         LA    R6,S99TUPL+20    Point just past 5 text pointers
+         USING S99TUNIT,R6      Addressability for 1st text unit
+* Text Unit 1 - DDNAME (Set to 'DYNDCB')
+         ST    R6,S99TUPTR      Point 1st TU ptr to 1st TU
+         LA    R7,DALDDNAM      Get the key for DDNAME
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,1             Set count = 1
+         STH   R7,S99TUNUM      Set count = 1
+         LA    R7,6             Our DDNAME is 'DYNDCB'
          STH   R7,S99TULNG      ...and put it in the TU length field
          MVC   S99TUPAR(6),DDNAME Put the DDNAME into parm fld
 * Text Unit 2 - DSNAME
@@ -224,17 +308,16 @@ EOF      EQU   *                All done
 *
 * Handle various errors and send unsuccessful result code
 BADLEN   LA    R9,X'F0'         Invalid DS length = 0xF0
-         LA    R8,0             No need to free memory
          B     SENDERR
 LOCERR   ST    R15,RESPCOD2     Move the LOCATE/OBTAIN result RESPCOD2
          LA    R9,X'F1'         Dataset locate error = 0xF1
-         LA    R8,0             No need to free memory
          B     SENDERR
 FMTERR   LA    R9,X'F2'         Requested DS is not supported
-         LA    R8,0             No need to free memory
          B     SENDERR
 SVC99ERR LA    R9,X'F3'         Dynamic allocation error
-         LA    R4,STORSIZE
+         B     CLEANUP
+MBRERROR LA    R9,X'F4'         Member doesn't exist error
+CLEANUP  LA    R4,STORSIZE
          L     R5,DYNAREA
          FREEMAIN R,LV=(R4),A=(R5) Free our storage
          WTO   'Unsuccessful DYNALLOC during READ'
@@ -297,6 +380,12 @@ OBTCMLST CAMLST SEARCH,DYNDSN,OBTVOLSR,DSCBAREA
 OBTVOLSR DS    CL6
 DSCBAREA DS    0D
          DS    CL140
+* BLDL storage
+BLDLLIST DS    0H
+         DC    H'1'             Number of entries in the list
+         DC    H'12'            Length of each list entry
+BLDLNAME DS    CL8              Eight characters for member name
+         DS    XL4              Four more byte to round out the entry
 ***********************************************************************
 * Channel programs
 DSRCCW1  CCW   CONTROL,RESPONSE,SLI+CC,1
