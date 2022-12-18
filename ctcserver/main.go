@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -142,30 +143,66 @@ func connect(config configuration) (ctccmd, ctcdata ctc.CTC, err error) {
 		byteOrder = binary.LittleEndian
 	}
 
-	ctccmd, err = ctc.New(config.CmdLPort, config.CmdRPort, 0x500,
-		config.HerculesHost, hercVer, byteOrder)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"couldn't create CTC command device connection: %v", err)
-	}
+	// We need to listen for both CTC connections simultaneously. This is
+	// particularly important for Hercules 3.13, which has absolutely no
+	// re-connection logic, unlike Spinhawk and later. We'll fire both
+	// connection attempts off in goroutines and wait for them.
 
-	if err := ctccmd.Connect(); err != nil {
-		return nil, nil, fmt.Errorf(
-			"couldn't connect CTC command device: %v", err)
-	}
+	var wg sync.WaitGroup
+	var connectError bool
+	wg.Add(2)
 
-	ctcdata, err = ctc.New(config.DataLPort, config.DataRPort, 0x501,
-		config.HerculesHost, hercVer, byteOrder)
-	if err != nil {
-		ctccmd.Close()
-		return nil, nil, fmt.Errorf(
-			"couldn't create CTC data device connection: %v", err)
-	}
+	// Establish the command device connection.
+	go func() {
+		defer wg.Done()
+		var err error // don't race on err from the outer function
+		ctccmd, err = ctc.New(config.CmdLPort, config.CmdRPort, 0x500,
+			config.HerculesHost, hercVer, byteOrder)
+		if err != nil {
+			connectError = true
+			log.Error().Err(err).Msg(
+				"couldn't create CTC command device connection")
+			return
+		}
 
-	if err := ctcdata.Connect(); err != nil {
-		ctccmd.Close()
-		return nil, nil, fmt.Errorf(
-			"couldn't connect CTC data device: %v", err)
+		if err := ctccmd.Connect(); err != nil {
+			connectError = true
+			log.Error().Err(err).Msg("couldn't create CTC command device")
+			return
+		}
+	}()
+
+	// Establish the data device connection.
+	go func() {
+		defer wg.Done()
+		var err error // don't race on err from the outer function
+		ctcdata, err = ctc.New(config.DataLPort, config.DataRPort, 0x501,
+			config.HerculesHost, hercVer, byteOrder)
+		if err != nil {
+			connectError = true
+			log.Error().Err(err).Msg(
+				"couldn't create CTC data device connection")
+			return
+		}
+
+		if err := ctcdata.Connect(); err != nil {
+			connectError = true
+			log.Error().Err(err).Msg("couldn't connect CTC data device")
+			return
+		}
+	}()
+
+	wg.Wait()
+	if connectError {
+		// We don't know which connection failed, so we'll be careful during
+		// cleanup.
+		if ctccmd != nil {
+			ctccmd.Close()
+		}
+		if ctcdata != nil {
+			ctcdata.Close()
+		}
+		return nil, nil, fmt.Errorf("couldn't connect to Hercules")
 	}
 
 	return ctccmd, ctcdata, nil
