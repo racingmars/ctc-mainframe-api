@@ -207,7 +207,7 @@ NOMBRCHK L     R1,DYNAREA
          LA    R2,DYNDSN        R2 = address of DYNDSN
          LA    R10,0            R10 = 0
          LA    R11,1            R11 = 1
-FINDSPC  CLM   R9,1,0(R2)       Is DYNDSNÝR10¨ = ' '?
+FINDSPC  CLM   R9,1,0(R2)       Is DYNDSN[R10] = ' '?
          BE    FOUNDIT          ...yes
          AR    R10,R11          ...no, R10 = R10+1
          AR    R2,R11            ...and R2 = R2 + 1

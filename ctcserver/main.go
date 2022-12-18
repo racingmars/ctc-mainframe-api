@@ -29,6 +29,8 @@ func main() {
 	flagTrace := flag.Bool("trace", false, "Enable trace logging")
 	flagPretty := flag.Bool("pretty", false, "Enable pretty logging")
 	flagConfig := flag.String("config", "config.json", "Config file path")
+	flagCodepage := flag.String("codepage", "bracket",
+		"Code page - 'bracket' or 'cp37'")
 
 	fmt.Println()
 	fmt.Println("CTC Mainframe API")
@@ -59,6 +61,19 @@ func main() {
 		log.Debug().Msg("debug logging enabled")
 	} else {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
+
+	// Set up selected codepage globally. Eventually this should probably be
+	// per-API-call.
+	switch *flagCodepage {
+	case "bracket":
+		ctc.SetGlobalCodepage(ctc.CodepageBracket)
+	case "cp37":
+		ctc.SetGlobalCodepage(ctc.CodepageCP37)
+	default:
+		log.Error().Msgf("-codepage parameter must be \"bracket\" or "+
+			"\"cp37\". \"%s\" is not supported.", *flagCodepage)
+		os.Exit(1)
 	}
 
 	if i := realMain(*flagConfig); i > 0 {
