@@ -45,7 +45,7 @@ system. 500-503 are available for use in the default Moseley sysgen.
 Next, copy the config.json.sample file to config.json and adjust it
 appropriately:
 
- * `listen_port` is the HTTP listener port the service will lisetn on.
+ * `listen_port` is the HTTP listener port the service will listen on.
  * `hercules_host` is the address of your system Hercules runs on.
  * `hercules_v313` must be true for Hercules 3.13, false for all other
    versions (spinhawk, hyperion).
@@ -63,7 +63,7 @@ appropriately:
 
 ### Start everything
 
-*If you're using Hercules 3.13*, startup order is very important:
+**If you're using Hercules 3.13**, startup order is very important:
 
  1. Start the ctcserver binary on your host system.
  2. Start Hercules on your host system.
@@ -163,7 +163,7 @@ again.
 
 ## Example API usage
 
-The combination of the _PDF member list_ API and the _Read dataset_ API allow
+The combination of the _PDS member list_ API and the _Read dataset_ API allow
 you to easily save all the members from a PDS to a local directory. For
 example, with the API service running on port 8370, I wish to retrieve all
 members of the partitioned dataset `MWILSON.CTCSERV` into a new directory to
