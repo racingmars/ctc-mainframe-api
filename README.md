@@ -11,6 +11,99 @@ information.
 By Matthew R. Wilson, <mwilson@mattwilson.org>. Original repository at
 <https://github.com/racingmars/ctc-mainframe-api/>
 
+**This is very preliminary and everything is subject to change.**
+
+## How-To
+
+### Configure Hercules
+
+All Hercules versions and forks from Hercules 3.13 onward are supported.
+However, the CTC implementation in Hercules 3.13 CTC is much less robust than
+in Spinhawk and Hyperion in terms of initial connection order of operations
+and connection retry capability.
+
+Add a pair of CTC adapters to your Hercules configuration file. The following
+syntax works in Hercules 3.13, Spinhawk, and Hyperion.
+
+```
+#         lport rhost     rport
+0502 CTCE 15620 127.0.0.1 15600
+0503 CTCE 15630 127.0.0.1 15610
+```
+
+If using Hercules 3.13, lport and rport all must be even numbers. rhost is the
+address of the system you're running the Go binary on that will host the HTTP
+API.
+
+The device numbers (502 and 503 in this example) must go into the JCL
+procedure that starts the CTCSERV program in MVS in the `CTCCMD` and `CTCDATA`
+DD statements. The devices must have been defined as CTC devices in your
+system. 500-503 are available for use in the default Moseley sysgen.
+
+### Configure ctcserver
+
+Next, copy the config.json.sample file to config.json and adjust it
+appropriately:
+
+ * `listen_port` is the HTTP listener port the service will lisetn on.
+ * `hercules_host` is the address of your system Hercules runs on.
+ * `hercules_v313` must be true for Hercules 3.13, false for all other
+   versions (spinhawk, hyperion).
+ * `hercules_host_bigendian` should be false for most users. If your Hercules
+   is running on a big endian system (sparcv9, ppc64be, s390x, etc.), set to
+   true.
+ * `cmd_local_port` should match the lport of your first CTC definition in
+   Hercules (15620 in the above example).
+ * `cmd_remote_port` should match the rport of your first CTC definition in
+   Hercules (15600 in the above example).
+ * `data_local_port` should match the lport of your second CTC definition in
+   Hercules (15630 in the above example).
+ * `data_remote_port` should match the lport of your second CTC definition in
+   Hercules (15610 in the above example).
+
+### Start everything
+
+*If you're using Hercules 3.13*, startup order is very important:
+
+ 1. Start the ctcserver binary on your host system.
+ 2. Start Hercules on your host system.
+ 3. IPL MVS.
+
+For spinhawk and hyperion, startup order doesn't matter. Those versions of
+Hercules will always attempt to re-establish the CTC connections, so you can
+start and stop the ctcserver binary without needing to shut down and restart
+Hercules and MVS.
+
+Once ctcserver is running and MVS is IPLed, start the CTCSERV job under MVS.
+You may now make HTTP requests against the API.
+
+The available functions are listed in the "Available functions" section of
+this document.
+
+### Recovering from problems
+
+The CTC adapters are very sensitive to maintaing correct state synchronization
+between all parties involved. Furthermore, any bugs in my code could also
+contribute to things getting out of a good state. If you're using Hercules
+3.13... you probably just need to shut everything down and start over.
+
+But if you're using Spinhawk or Hyperion and things stop working, you can
+recover without needing to re-IPL MVS:
+
+ 1. Make sure the CTCSERV job on MVS is stopped (e.g. cancel it from the
+    console if you have to).
+ 2. Take the CTC adapters offline from the MVS console (e.g. `V 502,OFFLINE`
+    and `V 503,OFFLINE`).
+ 3. Remove the CTC adapters from Hercules (e.g. `detach 502` and
+    `detach 503`).
+ 4. Re-add the CTC adapters to Hercules (e.g.
+    `attach 502 CTCE 15620 127.0.0.1 15600` and
+    `attach 503 CTCE 15630 127.0.0.1 15610`).
+ 5. Vary the CTC adapters online from the MVS console (e.g. `V 502,ONLINE` and
+    `V 503,ONLINE`).
+ 6. Start the CTCSERV job in MVS again, and start the ctcserver binary on the
+    host system again.
+
 ## Repository layout
 
 This repository contains the following subdirectories for each component of
@@ -113,6 +206,29 @@ The **only** public interface is the HTTP API provided by the Go server; the
 CTC interface on the mainframe side is intended only for use by the
 accompanying Go code. It does not do any input validation; it is programmed to
 assume the calling Go code already takes care of this.
+
+## TODO
+
+One problem with the implementation right now is that I haven't yet figured
+out how to wait on data to arrive at the CTC adapter, so I have to sit in a
+polling loop running a SENSE CCW. That's not ideal. There may be a way to get
+MVS to act on the real device attention interruption and POST to a WAIT in the
+service... the first attempt I've made at this didn't work, but there's still
+something else to try.
+
+Otherwise, it'd be cool to add:
+
+ * Job submission (relatively straightforward: I can DYNALLOC an internal
+   reader and write JCL records to it).
+ * Writing, instead of just reading, datasets.
+ * Get job status and job output (as far as I can tell from some other
+   software on MVS 3.8, the only way to do this is to read the SYS1.HASPCKPT
+   dataset directly...I've not found any documentation for the format of the
+   data in there yet, though).
+ * Could probably add functions to list online volumes and some other MVS
+   status information.
+ * Could support uncataloged datasets when a volume name is provided and
+   listing VTOCs for a volume instead of just a catalog search.
 
 ## License
 
