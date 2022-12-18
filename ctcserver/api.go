@@ -10,6 +10,7 @@ package main
 // https://github.com/racingmars/ctc-mainframe-api/
 
 import (
+	"bytes"
 	"net/http"
 	"strings"
 
@@ -52,20 +53,36 @@ func (app *api) mbrlist(c echo.Context) error {
 
 func (app *api) read(c echo.Context) error {
 	dsn := c.Param("dsn")
+	ebcdicQueryParam := c.QueryParam("ebcdic")
 
-	results, err := app.ctcapi.Read(dsn)
+	raw := false
+	if ebcdicQueryParam == "true" {
+		raw = true
+	}
+
+	results, err := app.ctcapi.Read(dsn, raw)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError,
 			errorResponse{Error: err.Error()})
 	}
 
-	var output strings.Builder
-	for _, record := range results {
-		output.WriteString(record)
-		output.WriteString("\n")
+	// ASCII-translated output
+	if !raw {
+		var output strings.Builder
+		for _, record := range results {
+			output.WriteString(string(record))
+			output.WriteString("\n")
+		}
+		return c.String(http.StatusOK, output.String())
 	}
 
-	return c.String(http.StatusOK, output.String())
+	// Raw binary output
+	var output bytes.Buffer
+	for _, record := range results {
+		output.Write(record)
+	}
+	return c.Blob(http.StatusOK, "application/octet-stream", output.Bytes())
+
 }
 
 func (app *api) quit(c echo.Context) error {

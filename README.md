@@ -50,6 +50,11 @@ of member names.
 of type text/plain containing the ASCII-converted records with trailing spaces
 trimmed and a newline inserted after each record.
 
+Alternatively, for the raw EBCDIC version of the data, add an `ebcdic=true`
+query parameter: `GET /api/read/<dsn>?ebcdic=true`. This will return a content
+type of application/octet-stream with the data from the mainframe left
+untouched.
+
 Sequential datasets (e.g. `HLQ.DS1`) and members of partitioned datasets (e.g.
 `HLQ.DS2(MEMBER)`) are supported. However, only datasets with fixed record
 length (F or FB) are supported.

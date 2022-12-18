@@ -22,7 +22,7 @@ import (
 type CTCAPI interface {
 	GetDSList(basename string) ([]DSInfo, error)
 	GetMemberList(pdsName string) ([]string, error)
-	Read(dsn string) ([]string, error)
+	Read(dsn string, raw bool) ([][]byte, error)
 	Quit() error
 }
 

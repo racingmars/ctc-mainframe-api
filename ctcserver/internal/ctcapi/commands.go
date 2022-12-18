@@ -321,7 +321,7 @@ func (c *ctcapi) GetMemberList(pdsName string) ([]string, error) {
 	return entries, nil
 }
 
-func (c *ctcapi) Read(dsn string) ([]string, error) {
+func (c *ctcapi) Read(dsn string, raw bool) ([][]byte, error) {
 
 	if !dsnameOptionalMemberRegex.MatchString(dsn) {
 		return nil, fmt.Errorf("dataset name is invalid")
@@ -424,7 +424,7 @@ func (c *ctcapi) Read(dsn string) ([]string, error) {
 			resultCode, additionalCode)
 	}
 
-	var entries []string
+	var entries [][]byte
 	for {
 		// Read the entry
 		cmd, count, data, err := c.ctcdata.Read()
@@ -449,8 +449,12 @@ func (c *ctcapi) Read(dsn string) ([]string, error) {
 			break
 		}
 
-		record := strings.TrimRight(ctc.EtoS(data), " ")
-		entries = append(entries, record)
+		if raw {
+			entries = append(entries, data)
+		} else {
+			record := strings.TrimRight(ctc.EtoS(data), " ")
+			entries = append(entries, []byte(record))
+		}
 	}
 
 	return entries, nil
