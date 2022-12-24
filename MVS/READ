@@ -264,12 +264,12 @@ SKIPMBR  EQU   *
 *
 * Get the LRECL from the opened DCB
          LH    R10,DYNDCB+82    R10 = DCBLRECL
-         STH   R10,DSRCCW2+6    Set CCW length to LRECL
+         STH   R10,DSRCCW2B+6   Set CCW length to LRECL
          GETMAIN R,LV=(R10)     Get memory of LRECL length
          ST    R1,GETAREA       Save the address to GETAREA
-         ST    R1,DSRCCW2       Save the address to our CCW
+         ST    R1,DSRCCW2B      Save the address to our CCW
          LA    R1,WRITE         ...restore the CCW command byte
-         STC   R1,DSRCCW2       ...restore the CCW command byte
+         STC   R1,DSRCCW2B      ...restore the CCW command byte
          ST    R10,RECL         Save the LRECL to storage
 *
 * Send the initial response
@@ -285,7 +285,7 @@ SKIPMBR  EQU   *
          CLI   EXCPECB,X'7F'    Successful completion?
          BNE   WRITERR          ...No, bail out
 * Prepare the IOB for sending the dataset records
-         LA    R9,DSRCCW2       Load address of DSRCCW2 to R9
+         LA    R9,DSRCCW2A      Load address of DSRCCW2 to R9
          ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
          L     R9,GETAREA       Address of our get buffer in R9
 * Now we have the DYNDCB open and ready to read the records.
@@ -390,8 +390,10 @@ BLDLNAME DS    CL8              Eight characters for member name
 * Channel programs
 DSRCCW1  CCW   CONTROL,RESPONSE,SLI+CC,1
          CCW   WRITE,RESPONSE,SLI,RESPLEN
-DSRCCW2  CCW   WRITE,RESPONSE,SLI,1
-DSRCCW3  CCW   WRITE,EOFREC,SLI,1
+DSRCCW2A CCW   CONTROL,RESPONSE,SLI+CC,1
+DSRCCW2B CCW   WRITE,RESPONSE,SLI,1
+DSRCCW3  CCW   CONTROL,EOFREC,SLI+CC,1
+         CCW   WRITE,EOFREC,SLI,1
 WRITE    EQU   X'01'
 CONTROL  EQU   X'07'
 SENSE    EQU   X'14'

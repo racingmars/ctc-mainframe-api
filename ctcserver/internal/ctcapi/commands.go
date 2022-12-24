@@ -129,6 +129,27 @@ func (c *ctcapi) GetDSList(basename string) ([]DSInfo, error) {
 
 	var entries []DSInfo
 	for i := 0; i < int(numEntries); i++ {
+		// Wait for a CONTROL command
+		cmd, _, _, err := c.ctcdata.Read()
+		if err != nil {
+			log.Error().Err(err).Msg("error during ctcdata.Read() while " +
+				"awaiting CONTROL for entry in GetDSList()")
+			return nil, err
+		}
+		if cmd != ctc.CTCCmdControl {
+			errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
+				"during ctcdata.Read() entry read, got %02x", cmd)
+			log.Error().Msg(errmsg)
+			return nil, errors.New(errmsg)
+		}
+
+		// Send a SENSE command in response
+		if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
+			log.Error().Err(err).Msg(
+				"error trying to read entry SENSE from ctcdata in GetDSList()")
+			return nil, err
+		}
+
 		// Read the entry
 		cmd, count, data, err := c.ctcdata.Read()
 		if err != nil {
@@ -289,6 +310,28 @@ func (c *ctcapi) GetMemberList(pdsName string) ([]string, error) {
 
 	var entries []string
 	for {
+		// Wait for a CONTROL command
+		cmd, _, _, err := c.ctcdata.Read()
+		if err != nil {
+			log.Error().Err(err).Msg("error during ctcdata.Read() while " +
+				"awaiting CONTROL for entry in GetMemberList()")
+			return nil, err
+		}
+		if cmd != ctc.CTCCmdControl {
+			errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
+				"during ctcdata.Read() entry read, got %02x", cmd)
+			log.Error().Msg(errmsg)
+			return nil, errors.New(errmsg)
+		}
+
+		// Send a SENSE command in response
+		if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
+			log.Error().Err(err).Msg(
+				"error trying to read entry SENSE from ctcdata in " +
+					"ReaGetMemberListDS()")
+			return nil, err
+		}
+
 		// Read the entry
 		cmd, count, data, err := c.ctcdata.Read()
 		if err != nil {
@@ -426,6 +469,27 @@ func (c *ctcapi) Read(dsn string, raw bool) ([][]byte, error) {
 
 	var entries [][]byte
 	for {
+		// Wait for a CONTROL command
+		cmd, _, _, err := c.ctcdata.Read()
+		if err != nil {
+			log.Error().Err(err).Msg("error during ctcdata.Read() while " +
+				"awaiting CONTROL for entry in ReadDS()")
+			return nil, err
+		}
+		if cmd != ctc.CTCCmdControl {
+			errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
+				"during ctcdata.Read() entry read, got %02x", cmd)
+			log.Error().Msg(errmsg)
+			return nil, errors.New(errmsg)
+		}
+
+		// Send a SENSE command in response
+		if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
+			log.Error().Err(err).Msg(
+				"error trying to read entry SENSE from ctcdata in ReadDS()")
+			return nil, err
+		}
+
 		// Read the entry
 		cmd, count, data, err := c.ctcdata.Read()
 		if err != nil {
