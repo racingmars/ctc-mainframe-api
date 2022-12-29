@@ -1,5 +1,6 @@
 $$$INDEX - This index of members.
 $BUILD   - (jcl) Procedures to build and link the program.
+$COPYING - (txt) GNU General Public License
 $DEBUG   - (jcl) Procedure to run the program under MVS DDT debugger.
 $RUN     - (jcl) Procedure to run the program.
 CTCSERV  - (asm) Main program entry point.
