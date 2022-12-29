@@ -88,17 +88,18 @@ STORSIZE EQU   120              120 bytes is a few more than we need
          ST    R5,S99TXTPP      Init text points address in RB
          LA    R6,S99TUPL+16    Point just past 4 text pointers
          USING S99TUNIT,R6      Addressability for 1st text unit
-* Text Unit 1 - DDNAME (Set to 'DYNDCB')
+* Text Unit 1 - DALRTDDN (Return DDNAME)
          ST    R6,S99TUPTR      Point 1st TU ptr to 1st TU
-         LA    R7,DALDDNAM      Get the key for DDNAME
+         LA    R7,DALRTDDN      Get the key for DDNAME
          STH   R7,S99TUKEY      Put the key in the text unit key field
          LA    R7,1             Set count = 1
          STH   R7,S99TUNUM      Set count = 1
-         LA    R7,6             Out DDNAME is 'DYNDCB'
+         LA    R7,8             DDNAMEs may be up to 8 characters long
          STH   R7,S99TULNG      ...and put it in the TU length field
-         MVC   S99TUPAR(6),DDNAME Put the DDNAME into parm fld
+         LA    R1,S99TUPAR      Get addr where the DDNAME will end up
+         ST    R1,DDN           ...and save to storage
 * Text Unit 2 - DSNAME
-         LA    R6,S99TUNIT+12   Point just past 1st text unit
+         LA    R6,S99TUNIT+14   Point just past 1st text unit
          LA    R5,S99TUPL+4     Point to the 2nd text unit ptr in list
          ST    R6,S99TUPTR      Point 2nd TU ptr to 2nd TU
          LA    R7,DALDSNAM      Get the key for DSNAME
@@ -132,6 +133,10 @@ STORSIZE EQU   120              120 bytes is a few more than we need
          DYNALLOC               Invoke DYNALLOC to process request
          LTR   R15,R15          DYNALLOC return code
          BNZ   SVC99ERR         ...was not successful
+* Copy the DDNAME to our DCB
+         L     R1,DDN           Get address of DDNAME param
+         MVC   DYNDCB+40(8),0(R1) Copy the DDNAME
+*
          OPEN  (DYNDCB,INPUT)
 * TODO: Should check that the open was successful
 *
@@ -252,10 +257,10 @@ OUTLEN   EQU   *-OUTREC
 INREC    DS    CL256
 SAVEAREA DS    18F
 DYNAREA  DS    A
+DDN      DS    A                Address of location of dynamic DDNAME
 DYNDSN   DS    CL44             DSNAME to dynamically allocate
-DYNDCB   DCB   DDNAME=DYNDCB,DSORG=PS,MACRF=GM,BLKSIZE=256,RECFM=F,    +
+DYNDCB   DCB   DDNAME=XXXXXXXX,DSORG=PS,MACRF=GM,BLKSIZE=256,RECFM=F,  +
                LRECL=256
-DDNAME   DC    C'DYNDCB'
 * The following instruction is used by an EX instruction to move the
 * variable-length sized user data to the output area.
          DS    0F

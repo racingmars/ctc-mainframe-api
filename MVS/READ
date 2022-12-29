@@ -109,17 +109,18 @@ STORSIZE EQU   200              200 bytes is well more than we need
          ST    R5,S99TXTPP      Init text points address in RB
          LA    R6,S99TUPL+20    Point just past 5 text pointers
          USING S99TUNIT,R6      Addressability for 1st text unit
-* Text Unit 1 - DDNAME (Set to 'DYNDCB')
+* Text Unit 1 - DALRTDDN (Return DDNAME)
          ST    R6,S99TUPTR      Point 1st TU ptr to 1st TU
-         LA    R7,DALDDNAM      Get the key for DDNAME
+         LA    R7,DALRTDDN      Get the key for DDNAME
          STH   R7,S99TUKEY      Put the key in the text unit key field
          LA    R7,1             Set count = 1
          STH   R7,S99TUNUM      Set count = 1
-         LA    R7,6             Our DDNAME is 'DYNDCB', so length = 6
+         LA    R7,8             DDNAMEs may be up to 8 characters long
          STH   R7,S99TULNG      ...and put it in the TU length field
-         MVC   S99TUPAR(6),DDNAME Put the DDNAME into parm fld
+         LA    R1,S99TUPAR      Get addr where the DDNAME will end up
+         ST    R1,DDN           ...and save to storage
 * Text Unit 2 - DSNAME
-         LA    R6,S99TUNIT+12   Point just past 1st text unit
+         LA    R6,S99TUNIT+14   Point just past 1st text unit
          LA    R5,S99TUPL+4     Point to the 2nd text unit ptr in list
          ST    R6,S99TUPTR      Point 2nd TU ptr to 2nd TU
          LA    R7,DALDSNAM      Get the key for DSNAME
@@ -154,15 +155,18 @@ STORSIZE EQU   200              200 bytes is well more than we need
          DYNALLOC               Invoke DYNALLOC to process request
          LTR   R15,R15          DYNALLOC return code
          BNZ   SVC99ERR         ...was not successful
+* Copy the DDNAME to our DCB
+         L     R1,DDN           Get address of DDNAME param
+         MVC   DYNDCB+40(8),0(R1) Copy the DDNAME
+*
          OPEN  (DYNDCB,INPUT)
          MVC   BLDLNAME,DYNMBR  Copy member name to our BLDL list
          BLDL  DYNDCB,BLDLLIST  Build the directory entry list
-         LTR   R15,R15          Check return code
-         BZ    BLDLGOOD         Success: member must exists
-         CLOSE (DYNDCB)         Failed: member probably doesn't exist
-         B     MBRERROR         Bail out and report the error
-BLDLGOOD CLOSE (DYNDCB)         Close the DS to we can re-allocate
-*                               with the specific member name.
+         LTR   R3,R15           Copy return code to R3 to check later
+         CLOSE (DYNDCB)
+         LTR   R3,R3            Original return code
+         BZ    NOMBRCHK         Success: member must exist, proceed
+         B     MBRERROR         Failure: Bail out and report the error
 * Either the member check has succeeded, or we're not trying to open
 * a PDS member, so we can now create our DYNALLOC request to open the
 * caller's requested dataset.
@@ -183,17 +187,18 @@ NOMBRCHK L     R1,DYNAREA
          ST    R5,S99TXTPP      Init text points address in RB
          LA    R6,S99TUPL+20    Point just past 5 text pointers
          USING S99TUNIT,R6      Addressability for 1st text unit
-* Text Unit 1 - DDNAME (Set to 'DYNDCB')
+* Text Unit 1 - DALRTDDN (Return DDNAME)
          ST    R6,S99TUPTR      Point 1st TU ptr to 1st TU
-         LA    R7,DALDDNAM      Get the key for DDNAME
+         LA    R7,DALRTDDN      Get the key for DDNAME
          STH   R7,S99TUKEY      Put the key in the text unit key field
          LA    R7,1             Set count = 1
          STH   R7,S99TUNUM      Set count = 1
-         LA    R7,6             Our DDNAME is 'DYNDCB'
+         LA    R7,8             DDNAMEs may be up to 8 characters long
          STH   R7,S99TULNG      ...and put it in the TU length field
-         MVC   S99TUPAR(6),DDNAME Put the DDNAME into parm fld
+         LA    R1,S99TUPAR      Get addr where the DDNAME will end up
+         ST    R1,DDN           ...and save to storage
 * Text Unit 2 - DSNAME
-         LA    R6,S99TUNIT+12   Point just past 1st text unit
+         LA    R6,S99TUNIT+14   Point just past 1st text unit
          LA    R5,S99TUPL+4     Point to the 2nd text unit ptr in list
          ST    R6,S99TUPTR      Point 2nd TU ptr to 2nd TU
          LA    R7,DALDSNAM      Get the key for DSNAME
@@ -256,6 +261,9 @@ SKIPMBR  EQU   *
          DYNALLOC               Invoke DYNALLOC to process request
          LTR   R15,R15          DYNALLOC return code
          BNZ   SVC99ERR         ...was not successful
+* Copy the DDNAME to our DCB
+         L     R1,DDN           Get address of DDNAME param
+         MVC   DYNDCB+40(8),0(R1) Copy the DDNAME
          LA    R4,STORSIZE
          L     R5,DYNAREA
          FREEMAIN R,LV=(R4),A=(R5) Free our storage
@@ -366,12 +374,12 @@ EOFREC   DC    X'FF'
 *
 SAVEAREA DS    18F
 DYNAREA  DS    A
+DDN      DS    A                Address of location of dynamic DDNAME
 DYNDSN   DS    CL44             DSNAME to dynamically allocate
          DC    C' '             Terminating space (right after DYNDSN
 *                                 for safety)
 DYNMBR   DS    CL8              Member name to dynamically allocate
-DYNDCB   DCB   DDNAME=DYNDCB,MACRF=GM,DSORG=PS,EODAD=EOF
-DDNAME   DC    C'DYNDCB'
+DYNDCB   DCB   DDNAME=XXXXXXXX,MACRF=GM,DSORG=PS,EODAD=EOF
 * LOCATE and OBTAIN storage
 LOCCMLST CAMLST NAME,DYNDSN,,LOCWRK  Will locate DSNAME in DYNDSN
 LOCWRK   DS    0D
