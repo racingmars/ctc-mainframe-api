@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -63,6 +64,12 @@ func (c *ctcapi) sendCommand(op opcode, param []byte) error {
 	if cmd != ctc.CTCCmdSense {
 		log.Error().Msgf("expected SENSE but got %02x.", cmd)
 	}
+
+	// Putting this brief pause between doing the control/sense then the write
+	// seems to eliminate an intermittent condition during stress testing on
+	// my system where we get the sense from Hercules/MVS, but then either
+	// Hercules or MVS never picks up the write state change.
+	time.Sleep(25 * time.Millisecond)
 
 	// Send the WRITE with the command line
 	var buf bytes.Buffer
