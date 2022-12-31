@@ -155,15 +155,19 @@ STORSIZE EQU   200              200 bytes is well more than we need
          DYNALLOC               Invoke DYNALLOC to process request
          LTR   R15,R15          DYNALLOC return code
          BNZ   SVC99ERR         ...was not successful
+* Prepare our DCB by resetting to default values
+         MVC   DYNDCB(DCBLEN),MDLDCB
 * Copy the DDNAME to our DCB
          L     R1,DDN           Get address of DDNAME param
          MVC   DYNDCB+40(8),0(R1) Copy the DDNAME
 *
-         OPEN  (DYNDCB,INPUT)
+         OPEN  (DYNDCB,(INPUT))
          MVC   BLDLNAME,DYNMBR  Copy member name to our BLDL list
          BLDL  DYNDCB,BLDLLIST  Build the directory entry list
          LTR   R3,R15           Copy return code to R3 to check later
          CLOSE (DYNDCB)
+         FREEPOOL DYNDCB        Release the system-allocated buffer
+*                               pool for this DCB.
          LTR   R3,R3            Original return code
          BZ    NOMBRCHK         Success: member must exist, proceed
          B     MBRERROR         Failure: Bail out and report the error
@@ -261,13 +265,15 @@ SKIPMBR  EQU   *
          DYNALLOC               Invoke DYNALLOC to process request
          LTR   R15,R15          DYNALLOC return code
          BNZ   SVC99ERR         ...was not successful
+* Prepare our DCB with the default values
+         MVC   DYNDCB(DCBLEN),MDLDCB
 * Copy the DDNAME to our DCB
          L     R1,DDN           Get address of DDNAME param
          MVC   DYNDCB+40(8),0(R1) Copy the DDNAME
          LA    R4,STORSIZE
          L     R5,DYNAREA
          FREEMAIN R,LV=(R4),A=(R5) Free our storage
-         OPEN  (DYNDCB,INPUT)
+         OPEN  (DYNDCB,(INPUT))
 * TODO: Should check that the open was successful
 *
 * Get the LRECL from the opened DCB
@@ -344,6 +350,7 @@ SENDERR  ST    R9,RESPCODE      Save the result code to RESPONSE
          B     QUIT
 WRITERR  WTO   'Unsuccessful CTC WRITE during READ'
 DONE     CLOSE (DYNDCB)
+         FREEPOOL DYNDCB
          L     R4,GETAREA
          L     R5,RECL
          FREEMAIN R,LV=(R5),A=(R4) Free our memory
@@ -380,6 +387,10 @@ DYNDSN   DS    CL44             DSNAME to dynamically allocate
 *                                 for safety)
 DYNMBR   DS    CL8              Member name to dynamically allocate
 DYNDCB   DCB   DDNAME=XXXXXXXX,MACRF=GM,DSORG=PS,EODAD=EOF
+* Model DCB that we will use to reset the DCB to default state after
+* each use.
+MDLDCB   DCB   DDNAME=XXXXXXXX,MACRF=GM,DSORG=PS,EODAD=EOF
+DCBLEN   EQU   *-MDLDCB
 * LOCATE and OBTAIN storage
 LOCCMLST CAMLST NAME,DYNDSN,,LOCWRK  Will locate DSNAME in DYNDSN
 LOCWRK   DS    0D
@@ -425,9 +436,9 @@ EXCPECB  DS    F
          DS    0F
 CMDLNMSK DC    X'00FFFF00'      Mask to get the param length
          PRINT NOGEN
-         IEFZB4D0               DYNALLOC DSECT
-         IEFZB4D2               DYNALLOC symbolic names
-RBLEN    EQU   S99RBEND-S99RB
+         IEFZB4D0 ,             DYNALLOC DSECT
+         IEFZB4D2 ,             DYNALLOC symbolic names
+RBLEN    EQU   S99RBEND-S99RB   Length of SVC99 request block (RB)
 **********************************************************************
 * Register symbols                                                   *
 **********************************************************************

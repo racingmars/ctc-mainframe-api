@@ -137,7 +137,7 @@ STORSIZE EQU   120              120 bytes is a few more than we need
          L     R1,DDN           Get address of DDNAME param
          MVC   DYNDCB+40(8),0(R1) Copy the DDNAME
 *
-         OPEN  (DYNDCB,INPUT)
+         OPEN  (DYNDCB,(INPUT))
 * TODO: Should check that the open was successful
 *
 * Send the initial response
@@ -223,6 +223,7 @@ AFTERERR LTR   R8,R8            Do we need to free memory?
          B     DIRDONE          ...Yes, clean up
 WRITERR  WTO   'Unsuccessful CTC WRITE during MBLIST'
 DIRDONE  CLOSE (DYNDCB)
+         FREEPOOL DYNDCB        Release buffer pool for this DCB
          LA    R0,STORSIZE
          L     R2,DYNAREA
          FREEMAIN R,LV=(R0),A=(R2) Free our storage
@@ -305,9 +306,9 @@ EXCPECB  DS    F
          DS    0F
 CMDLNMSK DC    X'00FFFF00'      Mask to get the param length
          PRINT NOGEN
-         IEFZB4D0               DYNALLOC DSECT
-         IEFZB4D2               DYNALLOC symbolic names
-RBLEN    EQU   S99RBEND-S99RB
+         IEFZB4D0 ,             DYNALLOC DSECT
+         IEFZB4D2 ,             DYNALLOC symbolic names
+RBLEN    EQU   S99RBEND-S99RB   Length of SVC99 request block (RB)
 **********************************************************************
 * Register symbols                                                   *
 **********************************************************************
