@@ -152,6 +152,27 @@ Sequential datasets (e.g. `HLQ.DS1`) and members of partitioned datasets (e.g.
 `HLQ.DS2(MEMBER)`) are supported. However, only datasets with fixed record
 length (F or FB) are supported.
 
+### Submit job
+
+`POST /api/submit`
+
+The request body is the JCL of the job to submit, each line of which must be
+80 characters or fewer (including any in-stream data). If successfully
+submitted, the response body will be the job identifier assigned by the system
+(e.g. `JOB00073`). Note that in some cases, if the job cannot be processed,
+instead of an error result, you will get a seemingly successful result, but
+with the job identifier matching the CTC Server job's identifier instead of a
+newly generated job identifier.
+
+For example, to send a job with cURL:
+
+```
+curl -X POST --data-binary @- http://localhost:8370/api/submit << __EOF__
+//APIJOB  JOB CLASS=A,MSGCLASS=X
+//NOTHING EXEC PGM=IEFBR14
+__EOF__
+```
+
 ### Quit
 
 `GET /api/quit`
@@ -232,7 +253,7 @@ Otherwise, it'd be cool to add:
 
 ## License
 
-Copyright 2022 Matthew R. Wilson <mwilson@mattwilson.org>.
+Copyright 2022-2023 Matthew R. Wilson <mwilson@mattwilson.org>.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software

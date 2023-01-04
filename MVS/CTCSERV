@@ -1,7 +1,7 @@
 ***********************************************************************
 * MVS SERVICES OVER CTC - MAIN ENTRY POINT                            *
 *                                                                     *
-* Copyright 2022 Matthew R. Wilson <mwilson@mattwilson.org>           *
+* Copyright 2022-2023 Matthew R. Wilson <mwilson@mattwilson.org>      *
 *                                                                     *
 * This file is part of CTC Mainframe API. CTC Mainframe API is free   *
 * software: you can redistribute it and/or modify it under the terms  *
@@ -57,8 +57,12 @@ CHK02    CLI   CMDOPCD,X'02'    Did we receive the MBRLIST command?
          CALL  MBRLIST,(CTCCMD,CTCDATA,CMDIN)  Yes, do it
          B     SENSLOOP
 CHK03    CLI   CMDOPCD,X'03'    Did we receive the READ command?
-         BNE   CHKFF            No, go on to next check
+         BNE   CHK04            No, go on to next check
          CALL  READ,(CTCCMD,CTCDATA,CMDIN)     Yes, do it
+         B     SENSLOOP
+CHK04    CLI   CMDOPCD,X'04'    Did we receive the SUBMIT command?
+         BNE   CHKFF            No, go to next check
+         CALL  SUBMIT,(CTCCMD,CTCDATA,CMDIN)   Yes, do it
          B     SENSLOOP
 CHKFF    CLI   CMDOPCD,X'FF'    Did we receive the quit command?
          BE    QUITCMD          Yes

@@ -1,0 +1,366 @@
+***********************************************************************
+* MVS SERVICES OVER CTC - SUBMIT Command (0x04)                       *
+*                                                                     *
+* Copyright 2022-2023 Matthew R. Wilson <mwilson@mattwilson.org>      *
+*                                                                     *
+* This file is part of CTC Mainframe API. CTC Mainframe API is free   *
+* software: you can redistribute it and/or modify it under the terms  *
+* of the GNU General Public License as published by the Free Software *
+* Foundation, either version 3 of the license, or (at your option)    *
+* any later version.                                                  *
+***********************************************************************
+*
+         PRINT GEN
+SUBMIT   CSECT
+         SAVE  (14,12),,*       Save caller's registers
+         BALR  R12,0            Load current address
+         USING *,R12            Establish addressability
+         ST    R13,SAVEAREA+4   Store caller's savearea address
+         LA    R13,SAVEAREA     Load address of our savearea
+**********************************************************************
+* COMMAND: SUBMIT (0x04)                                             *
+* First 4 bytes of command parameter will be a binary fullword       *
+* indicating the number of records that will follow. We will then    *
+* read that number of 80-byte records from the command channel.      *
+* After submitting the job, we will return the assigned job number.  *
+**********************************************************************
+* Copy parameter list addresses
+         MVC   CTCCMDAD,0(R1)   Address of CTCCMD DCB
+         MVC   CTCDTAAD,4(R1)   Address of CTCDATA DCB
+         MVC   CMDINAD,8(R1)    Address of command input data
+* Check that the parameter length is 4 bytes
+         L     R2,CMDINAD       Get address of command input data
+         L     R1,0(,R2)        Get command parameter length
+         N     R1,CMDLNMSK      Mask out the command param length
+         SRL   R1,8             Shift right 8 bits
+         LA    R3,4             R3 = 4
+         CLR   R1,R3            Length = 4?
+         BNE   BADLEN           No, bail out
+* Get the number of job records from the command input area
+         MVC   JOBLEN,3(R2)
+* Check that records > 0
+         L     R1,JOBLEN
+         LTR   R1,R1
+         BNP   BADLEN           Error if joblen isn't positive
+*
+* Dynamically allocate an internal reader. This is described on page
+* 77 of GC28-0672-2, OS/VS2 MVS System Programming Library: Job
+* Management. Building our dynamic allocation request block is modeled
+* on the example beginning on page 74 of the same manual.
+*
+* Get storage for our dynamic allocation SVC 99 request
+STORSIZE EQU   200              200 bytes is well more than we need
+         LA    R0,STORSIZE
+         GETMAIN R,LV=(R0)      Get the storage necessary
+         ST    R1,DYNAREA       Save the address to DYNAREA
+         XC    0(STORSIZE,R1),0(R1) Zero out the memory
+* ...and build the request block (RB)
+         LR    R8,R1            Save the address to R8
+         USING S99RBP,R8        Addressability for RBPTR DSECT
+         LA    R4,S99RBPTR+4    Point 4 bytes beyond start of RBPTR
+         USING S99RB,R4         Addressability for RB DSECT
+         ST    R4,S99RBPTR      Point RBPTR to RB
+         OI    S99RBPTR,S99RBPND Turn on the high order bit in RBPTR
+         XC    S99RB(RBLEN),S99RB Zero out RB
+         MVI   S99RBLN,RBLEN    Put the length of RB in its length fld
+         MVI   S99VERB,S99VRBAL Set verb to allocation function
+         LA    R5,S99RB+RBLEN   Point 20 bytes beyond start of RB
+         USING S99TUPL,R5       Addressability for text unit ptrs
+         ST    R5,S99TXTPP      Init text points address in RB
+         LA    R6,S99TUPL+16    Point just past 4 text pointers
+         USING S99TUNIT,R6      Addressability for 1st text unit
+* Text Unit 1 - DDNAME (Set to 'INTRDR')
+         ST    R6,S99TUPTR      Point 1st TU ptr to 1st TU
+         LA    R7,DALDDNAM      Get the key for DDNAME
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,1             Set count = 1
+         STH   R7,S99TUNUM      Set count = 1
+         LA    R7,6             Our DDNAME will be 'INTRDR'
+         STH   R7,S99TULNG      ...and put it in the TU length field
+         MVC   S99TUPAR(6),DDN  Put the DDNAME into parm field
+* Text Unit 2 - DALSYSOU (SYSOUT data set)
+         LA    R6,S99TUNIT+12   Point just past 1st text unit
+         LA    R5,S99TUPL+4     Point to the 2nd text unit ptr in list
+         ST    R6,S99TUPTR      Point 2nd TU ptr to 2nd TU
+         LA    R7,DALSYSOU      Get the key for SYSOUT specification
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,0             Set count = 0
+         STH   R7,S99TUNUM      Set count = 0
+* Text Unit 3 - DALSPGNM (SYSOUT Program Name - set to INTRDR)
+         LA    R6,S99TUNIT+4    Point just past 2nd text unit
+         LA    R5,S99TUPL+4     Point to the 3rd text unit ptr in list
+         ST    R6,S99TUPTR      Point 3rd TU ptr to 3rd TU
+         LA    R7,DALSPGNM      Get the key for SYSOUT program name
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,1             Set count = 1
+         STH   R7,S99TUNUM      Set count = 1
+         LA    R7,6             Set length = 6
+         STH   R7,S99TULNG      Set length = 6
+         MVC   S99TUPAR(6),=C'INTRDR'  Set parm to 'INTRDR'
+* Text Unit 4 - CLOSE - deallocate at close
+         LA    R6,S99TUNIT+12   Point just past 3rd text unit
+         LA    R5,S99TUPL+4     Point to the 4rd text unit ptr in list
+         ST    R6,S99TUPTR      Point 4rd TU ptr to 4rd TU
+         LA    R7,DALCLOSE      Get the key for status specification
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,0             Set count = 0
+         STH   R7,S99TUNUM      Set count = 0
+         OI    S99TUPTR,S99TUPLN Turn on high bit to indicate last ptr
+* Done building dynamic allocation request
+         DROP  R4,R5,R6,R8
+         LR    R1,R8            Put request block ptr in R1
+         DYNALLOC               Invoke DYNALLOC to process request
+         LTR   R15,R15          DYNALLOC return code
+         BNZ   SVC99ERR         ...was not successful
+* Create an ACB with our DDNAME
+         GENCB BLK=ACB,                                                X
+               MACRF=(ADR,SEQ,OUT),                                    X
+               DDNAME=INTRDR
+         LTR   R15,R15          Error?
+         BNZ   ACBERR           ...yes
+         ST    R1,ACBADDR       Store the address of the generated ACB
+         ST    R0,ACBLEN        Store the length of the generated ACB
+* Open the internal reader
+         LR    R2,R1            R2 = R1 (address of ACB)
+         OPEN  ((R2))           Open the internal reader
+* Create an RPL for our PUTs
+         GENCB BLK=RPL,                                                X
+               ACB=(R2),                                               X
+               OPTCD=(ADR,SEQ,SYN,NUP,MVE),                            X
+               RECLEN=80,                                              X
+               AREA=JCLBUF,                                            X
+               AREALEN=80
+         LTR   R15,R15          Error?
+         BNZ   RPLERR           ...yes
+         ST    R1,RPLADDR       Store the address of the generated RPL
+         ST    R0,RPLLEN        Store the length of the generated RPL
+*
+* We've opened the internal reader and set up our RPL. Now we can
+* indicate to the other side that they can proceed with sending the
+* first JCL record.
+*
+* Send the initial response
+         LA    R9,0             Just hard-code an "ok" response
+         ST    R9,RESPONSE
+         LA    R9,SUBCCW1       Load address of SUBCCW1 to R9
+         ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
+         L     R9,CTCDTAAD      Load address of CTCDATA DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to our DCB
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   WRITERR          ...No, bail out
+* While record count > 0, read a JCL record from the CTC adapter,
+* write it to the internal reader, and send the "ok" (hopefully)
+* response over the CTC adapter.
+         L     R10,JOBLEN       Load the number of JCL records to R10
+LOOP     L     R9,CTCCMDAD      Load address of CTCCMD DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to the CTCCMD DCB
+         LA    R9,SUBCCW4       Load address of our SENSE CCW
+         ST    R9,IOBCCWAD      Point our IOB to our SENSE CCW
+SENSLOOP XC    EXCPECB,EXCPECB  Clear EXCPECB
+         XC    IOBFLAGS,IOBFLAGS
+         XC    IOBSENSE,IOBSENSE
+         XC    IOBCSWFL,IOBCSWFL
+         XC    IOBRESDL,IOBRESDL
+         EXCP  IOB              Run our SENSE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   SENSERR          ...No, bail out
+         CLI   SENSEREC,CONTROL Did we sense a CONTROL command?
+         BNE   SLEEP            No, sleep and retry
+         B     DOREAD           Yes, do the read now
+SLEEP    STIMER WAIT,BINTVL=SLPTIM Sleep for 10ms
+         B     SENSLOOP            ...then retry sense
+DOREAD   LA    R9,SUBCCW2       Load address of our READ CCW
+         ST    R9,IOBCCWAD      Point our IOB to our READ CCW
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our READ command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   READERR          ...No, bail out
+         L     R9,RPLADDR       Load address of the internal rdr RPL
+         PUT   RPL=(R9)         Write the JCL record to the reader
+         LTR   R15,R15          Success?
+         BNZ   PUTERR           ...No, bail out
+         L     R9,CTCDTAAD      Load address of CTCDAT DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to the CTCDAT DCB
+         LA    R9,SUBCCW1       Load address of our WRITE CCW
+         ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
+         LA    R9,0             Load OK result code
+         ST    R9,RESPONSE      Store it in the response buffer
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   WRITERR          ...No, bail out
+         BCT   R10,LOOP         Decrement count and loop if not 0
+*
+* We have read all of the JCL records and written them to the internal
+* reader. Now we submit the job with ENDREQ, get the job name, and
+* close the reader.
+*
+         L     R9,RPLADDR       Load address of the internal rdr RPL
+         ENDREQ RPL=(R9)
+         LTR   R15,R15          Success?
+         BNZ   ENDERR           ...No, bail out
+         MVC   JOBNAME(8),60(R9)  Copy job name (from RPLRBAR)
+* Send final response with job name
+         LA    R9,0             "ok" response
+         ST    R9,FINRESP
+         LA    R9,SUBCCW3       Load address of SUBCCW3 to R9
+         ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
+         L     R9,CTCDTAAD      Load address of CTCDATA DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to our DCB
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   WRITERR          ...No, bail out
+         B     CLEANUP          We're done!
+*
+* Handle various errors and send unsuccessful result code. We will
+* put the response code in R9, and the address of the point at which to
+* start deallocating resources in R10. SENDERR will send the response
+* code then jump to R10.
+*
+BADLEN   LA    R9,X'F0'         Invalid command length = 0xF0
+         LA    R10,QUIT
+         B     SENDERR
+SVC99ERR LA    R9,X'F1'         DYNALLOC error = 0xF1
+         LA    R10,CLEANS99
+         B     SENDERR
+ACBERR   LA    R9,X'F2'         Generate ACB error = 0xF2
+         LA    R10,CLEANS99
+         B     SENDERR
+RPLERR   LA    R9,X'F3'         Generate RPL error = 0xF3
+         LA    R10,CLOSEACB
+         B     SENDERR
+PUTERR   LA    R9,X'F4'         PUT error = 0xF4
+         LA    R10,CLEANRPL
+         B     SENDERR
+ENDERR   LA    R9,X'F5'         ENDREQ error = 0xF5
+         LA    R10,CLEANRPL
+         B     SENDERR
+SENDERR  ST    R9,RESPONSE      Save the result code to RESPONSE
+         LA    R9,SUBCCW1       Load address of SUBCCW1 to R9
+         ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
+         L     R9,CTCDTAAD      Load address of CTCDATA DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to our DCB
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BE    CLEANUP          ...Yes, we can quit
+         WTO   'Unsuccessful CTC WRITE during SUBMIT error write'
+         B     CLEANUP
+READERR  WTO   'Unsuccessful CTC READ during SUBMIT'
+         B     CLEANUP
+SENSERR  WTO   'Unsuccessful CTC SENSE during SUBMIT'
+         B     CLEANUP
+WRITERR  WTO   'Unsuccessful CTC WRITE during SUBMIT'
+*
+* The cleanup tasks run in reverse order of allocation, so from
+* different error points we can branch into them and let the remaining
+* ones run sequentially.
+*
+CLEANUP  EQU   *
+CLEANRPL L     R4,RPLADDR
+         L     R5,RPLLEN
+         FREEMAIN R,LV=(R5),A=(R4)   Free the VSAM RPL
+CLOSEACB L     R4,ACBADDR
+         CLOSE ((R4))                Close our VSAM control block
+CLEANACB L     R4,ACBADDR
+         L     R5,ACBLEN
+         FREEMAIN R,LV=(R5),A=(R4)   Free the VSAM ACB
+CLEANS99 L     R4,DYNAREA
+         LA    R5,STORSIZE
+         FREEMAIN R,LV=(R5),A=(R4)   Free our SVC 99 request
+* Return to caller
+QUIT     L     R13,4(R13)       Restore address of caller's save area
+         LM    R14,R12,12(R13)  Restore caller's registers
+         LA    R15,0            RC=0
+         BR    R14              Return to caller
+*
+**********************************************************************
+**********************************************************************
+*
+***** Parameters passed into us
+CTCCMDAD DS    F
+CTCDTAAD DS    F
+CMDINAD  DS    F
+*
+***** Storage and CCWs for SUBMIT command
+SENSEREC DS    CL1              Command byte from SENSE command
+* Initial and final responses
+RESPONSE DS    F
+RESPLEN  EQU   *-RESPONSE
+FINRESP  DS    F                Final response - result code and job nm
+JOBNAME  DS    CL8
+FINLEN   EQU   *-FINRESP
+*
+SAVEAREA DS    18F
+DYNAREA  DS    A
+DDN      DC    C'INTRDR'        DDNAME to dynamically allocate
+JOBLEN   DS    F                Number of job records
+JCLBUF   DS    CL80             JCL record buffer
+ACBADDR  DS    A                Generated ACB address
+ACBLEN   DS    F                Generated ACB size
+RPLADDR  DS    A                Generated RPL address
+RPLLEN   DS    F                Generated RPL size
+***********************************************************************
+* Channel programs
+SUBCCW1  CCW   CONTROL,RESPONSE,SLI+CC,1     Send CONTROL+WRITE with
+         CCW   WRITE,RESPONSE,SLI,RESPLEN      response code
+SUBCCW2  CCW   READ,JCLBUF,SLI,80            Read a JCL record
+SUBCCW3  CCW   CONTROL,RESPONSE,SLI+CC,1     Send CONTROL+WRITE with
+         CCW   WRITE,FINRESP,SLI,FINLEN        response code + job name
+SUBCCW4  CCW   SENSE,SENSEREC,SLI,1          Send SENSE
+WRITE    EQU   X'01'
+READ     EQU   X'02'
+CONTROL  EQU   X'07'
+SENSE    EQU   X'14'
+SLI      EQU   X'20'
+CC       EQU   X'40'
+* EXCP IOB
+IOB      DS    0F
+IOBFLAGS DC    XL2'0000'
+IOBSENSE DC    XL2'0000'
+IOBECBAD DC    A(EXCPECB)
+IOBCSW   DC    A(0)
+IOBCSWFL DC    XL2'0000'
+IOBRESDL DC    H'00'
+IOBCCWAD DC    A(0)
+IOBDCBAD DC    A(0)
+         DC    F'0'
+         DC    F'0'
+EXCPECB  DS    F
+* Utility variables
+         DS    0F
+CMDLNMSK DC    X'00FFFF00'      Mask to get the param length
+SLPTIM   DC    F'1'
+         PRINT NOGEN
+         IEFZB4D0 ,             DYNALLOC DSECT
+         IEFZB4D2 ,             DYNALLOC symbolic names
+RBLEN    EQU   S99RBEND-S99RB   Length of SVC99 request block (RB)
+**********************************************************************
+* Register symbols                                                   *
+**********************************************************************
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END   SUBMIT

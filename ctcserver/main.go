@@ -119,6 +119,7 @@ func realMain(configPath string) int {
 	e.GET("/api/dslist/:prefix", app.dslist)
 	e.GET("/api/mbrlist/:pdsName", app.mbrlist)
 	e.GET("/api/read/:dsn", app.read)
+	e.POST("/api/submit", app.submit)
 	e.GET("/api/quit", app.quit)
 
 	// Run it

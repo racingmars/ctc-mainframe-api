@@ -10,11 +10,13 @@ package main
 // https://github.com/racingmars/ctc-mainframe-api/
 
 import (
+	"bufio"
 	"bytes"
 	"net/http"
 	"strings"
 
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 
 	"github.com/racingmars/ctc-mainframe-api/ctcserver/internal/ctcapi"
 )
@@ -82,6 +84,28 @@ func (app *api) read(c echo.Context) error {
 		output.Write(record)
 	}
 	return c.Blob(http.StatusOK, "application/octet-stream", output.Bytes())
+
+}
+
+func (app *api) submit(c echo.Context) error {
+	var records []string
+	scanner := bufio.NewScanner(c.Request().Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		log.Trace().Msgf("Scanned one JCL record: %s", line)
+		records = append(records, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	result, err := app.ctcapi.Submit(records)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError,
+			errorResponse{Error: err.Error()})
+	}
+
+	return c.String(http.StatusOK, result)
 
 }
 
