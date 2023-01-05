@@ -239,8 +239,6 @@ something else to try.
 
 Otherwise, it'd be cool to add:
 
- * Job submission (relatively straightforward: I can DYNALLOC an internal
-   reader and write JCL records to it).
  * Writing, instead of just reading, datasets.
  * Get job status and job output (as far as I can tell from some other
    software on MVS 3.8, the only way to do this is to read the SYS1.HASPCKPT

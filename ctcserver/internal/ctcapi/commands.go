@@ -1,6 +1,6 @@
 package ctcapi
 
-// Copyright 2022 Matthew R. Wilson <mwilson@mattwilson.org>
+// Copyright 2022-2023 Matthew R. Wilson <mwilson@mattwilson.org>
 //
 // This file is part of CTC Mainframe API. CTC Mainframe API is free software:
 // you can redistribute it and/or modify it under the terms of the GNU General
@@ -11,11 +11,9 @@ package ctcapi
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -76,45 +74,15 @@ func (c *ctcapi) GetDSList(basename string) ([]DSInfo, error) {
 		return nil, err
 	}
 
-	// Wait for a CONTROL command
-	cmd, _, _, err := c.ctcdata.Read()
+	log.Debug().Msg("GetDSList(): reading initial response")
+	data, err := c.ctcdata.SenseRead()
 	if err != nil {
-		log.Error().Err(err).Msg(
-			"GetDSList(): error during ctcdata.Read() awaiting CONTROL")
-		return nil, err
+		return nil, fmt.Errorf("GetDSList(): couldn't perform SenseRead(): %v",
+			err)
 	}
-	if cmd != ctc.CTCCmdControl {
-		log.Error().Msgf("GetDSList(): didn't receive expected CONTROL "+
-			"command during ctcdata.Read(), got %02x", cmd)
-		return nil, fmt.Errorf("received unexpected CTC command")
-	}
-
-	// Send a SENSE command in response
-	if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
-		log.Error().Err(err).Msg(
-			"GetDSList(): error trying to read SENSE from ctcdata")
-		return nil, err
-	}
-
-	// Read the initial command response. This is two fullwords: response code
-	// and list length.
-	cmd, count, data, err := c.ctcdata.Read()
-	if err != nil {
-		log.Error().Err(err).Msg(
-			"GetDSList(): error trying to read initial response")
-		return nil, err
-	}
-	log.Debug().
-		Hex("command", []byte{byte(cmd)}).
-		Uint16("count", count).
-		Hex("data", data).
-		Msg("GetDSList() initial response")
-
-	// Now send our READ command to indicate we've read the response
-	if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
-		log.Error().Err(err).Msg(
-			"GetDSList(): error sending read after initial response")
-		return nil, err
+	if len(data) != 6 {
+		return nil, fmt.Errorf("GetDSList(): got %d bytes of data, expected 6",
+			len(data))
 	}
 
 	resultCode := binary.BigEndian.Uint32(data[0:4])
@@ -126,47 +94,22 @@ func (c *ctcapi) GetDSList(basename string) ([]DSInfo, error) {
 			resultCode)
 	}
 
-	log.Debug().Msgf("GetDSList(): mumber of results: %d", numEntries)
+	log.Debug().Msgf("GetDSList(): number of results: %d", numEntries)
 
 	var entries []DSInfo
 	for i := 0; i < int(numEntries); i++ {
-		// Wait for a CONTROL command
-		cmd, _, _, err := c.ctcdata.Read()
+		log.Debug().Msgf("GetDSList(): reading item %d of %d", i+1, numEntries)
+		data, err := c.ctcdata.SenseRead()
 		if err != nil {
-			log.Error().Err(err).Msg("error during ctcdata.Read() while " +
-				"awaiting CONTROL for entry in GetDSList()")
-			return nil, err
-		}
-		if cmd != ctc.CTCCmdControl {
-			errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
-				"during ctcdata.Read() entry read, got %02x", cmd)
-			log.Error().Msg(errmsg)
-			return nil, errors.New(errmsg)
-		}
-
-		// Send a SENSE command in response
-		if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
-			log.Error().Err(err).Msg(
-				"error trying to read entry SENSE from ctcdata in GetDSList()")
 			return nil, err
 		}
 
-		// Read the entry
-		cmd, count, data, err := c.ctcdata.Read()
-		if err != nil {
-			log.Error().Err(err).Msgf("GetDSList(): error reading entry %d", i)
-			return nil, err
-		}
-		log.Debug().
-			Hex("command", []byte{byte(cmd)}).
-			Uint16("count", count).
-			Hex("data", data).
-			Msgf("GetDSList(): got entry %d", i)
-		// Now send our READ command to indicate we've read the response
-		if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
-			log.Error().Err(err).Msgf(
-				"GetDSList(): error sending read after reading entry %d", i)
-			return nil, err
+		if len(data) != 147 {
+			log.Error().Msgf("got length %d DSList record, but expected 147",
+				len(data))
+			// Rather than bailing out early, we will at least try to get
+			// system state back in sync by continuing to read records.
+			continue
 		}
 
 		var dsinfo DSInfo
@@ -259,45 +202,16 @@ func (c *ctcapi) GetMemberList(pdsName string) ([]string, error) {
 		return nil, err
 	}
 
-	// Wait for a CONTROL command
-	cmd, _, _, err := c.ctcdata.Read()
+	log.Debug().Msg("GetMemberList(): reading initial response")
+	data, err := c.ctcdata.SenseRead()
 	if err != nil {
-		log.Error().Err(err).Msg("error during ctcdata.Read() while " +
-			"awaiting CONTROL in GetMemberList()")
-		return nil, err
+		return nil, fmt.Errorf(
+			"GetMemberList(): couldn't perform SenseRead(): %v", err)
 	}
-	if cmd != ctc.CTCCmdControl {
-		errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
-			"during ctcdata.Read(), got %02x", cmd)
-		log.Error().Msg(errmsg)
-		return nil, errors.New(errmsg)
-	}
-
-	// Send a SENSE command in response
-	if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
-		log.Error().Err(err).Msg(
-			"error trying to read SENSE from ctcdata in GetMemberList()")
-		return nil, err
-	}
-
-	// Read the initial response
-	cmd, count, data, err := c.ctcdata.Read()
-	if err != nil {
-		log.Info().Err(err).Msgf(
-			"error during ctcdata.Read() in GetMemberList()")
-		return nil, err
-	}
-	log.Debug().
-		Hex("command", []byte{byte(cmd)}).
-		Uint16("count", count).
-		Hex("data", data).
-		Msg("GetMemberList(): initial response")
-
-	// Now send our READ command to indicate we've read the response
-	if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
-		log.Info().Err(err).Msgf(
-			"GetMemberList(): error sending READ after initial response")
-		return nil, err
+	if len(data) != 8 {
+		return nil, fmt.Errorf(
+			"GetMemberList(): got %d bytes in initial response but expected 8",
+			len(data))
 	}
 
 	resultCode := binary.BigEndian.Uint32(data[0:4])
@@ -310,51 +224,27 @@ func (c *ctcapi) GetMemberList(pdsName string) ([]string, error) {
 	}
 
 	var entries []string
+	var i int
 	for {
-		// Wait for a CONTROL command
-		cmd, _, _, err := c.ctcdata.Read()
+		i++
+		log.Debug().Msgf("GetMemberList(): reading item %d", i)
+		data, err := c.ctcdata.SenseRead()
 		if err != nil {
-			log.Error().Err(err).Msg("error during ctcdata.Read() while " +
-				"awaiting CONTROL for entry in GetMemberList()")
-			return nil, err
+			return nil, fmt.Errorf("couldn't read item %d: %v", i, err)
 		}
-		if cmd != ctc.CTCCmdControl {
-			errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
-				"during ctcdata.Read() entry read, got %02x", cmd)
-			log.Error().Msg(errmsg)
-			return nil, errors.New(errmsg)
-		}
-
-		// Send a SENSE command in response
-		if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
-			log.Error().Err(err).Msg(
-				"error trying to read entry SENSE from ctcdata in " +
-					"ReaGetMemberListDS()")
-			return nil, err
-		}
-
-		// Read the entry
-		cmd, count, data, err := c.ctcdata.Read()
-		if err != nil {
-			log.Info().Err(err).Msg("GetMemberList(): error reading entry")
-			return nil, err
-		}
-		log.Debug().
-			Hex("command", []byte{byte(cmd)}).
-			Uint16("count", count).
-			Hex("data", data).
-			Msg("GetMemberList(): read entry")
-		// Now send our READ command to indicate we've read the response
-		if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
-			log.Error().Err(err).Msg(
-				"GetMemberList(): error sending READ after reading entry")
-			return nil, err
+		if len(data) < 8 {
+			log.Error().Msgf("got length %d member record, but expected >=8",
+				len(data))
+			// Rather than bailing out early, we will at least try to get
+			// system state back in sync by continuing to read records.
+			continue
 		}
 
 		if data[0] == 0xFF && data[1] == 0xFF && data[2] == 0xFF &&
 			data[3] == 0xFF && data[4] == 0xFF && data[5] == 0xFF &&
 			data[6] == 0xFF && data[7] == 0xFF {
 			// last member entry all high bytes. Done
+			log.Debug().Msg("GetMemberList(): got end record")
 			break
 		}
 
@@ -418,94 +308,32 @@ func (c *ctcapi) Read(dsn string, raw bool) ([][]byte, error) {
 		return nil, err
 	}
 
-	// Wait for a CONTROL command
-	cmd, _, _, err := c.ctcdata.Read()
+	log.Debug().Msg("Read(): reading initial response")
+	data, err := c.ctcdata.SenseRead()
 	if err != nil {
-		log.Error().Err(err).Msg("error during ctcdata.Read() while " +
-			"awaiting CONTROL in ReadDS()")
-		return nil, err
+		return nil, fmt.Errorf("Read(): couldn't perform SenseRead(): %v", err)
 	}
-	if cmd != ctc.CTCCmdControl {
-		errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
-			"during ctcdata.Read(), got %02x", cmd)
-		log.Error().Msg(errmsg)
-		return nil, errors.New(errmsg)
-	}
-
-	// Send a SENSE command in response
-	if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
-		log.Error().Err(err).Msg(
-			"error trying to read SENSE from ctcdata in ReadDS()")
-		return nil, err
-	}
-
-	// Read the initial response
-	cmd, count, data, err := c.ctcdata.Read()
-	if err != nil {
-		log.Info().Err(err).Msgf(
-			"error during ctcdata.Read() in ReadDS()")
-		return nil, err
-	}
-	log.Debug().
-		Hex("command", []byte{byte(cmd)}).
-		Uint16("count", count).
-		Hex("data", data).
-		Msg("ReadDS(): initial response")
-
-	// Now send our READ command to indicate we've read the response
-	if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
-		log.Info().Err(err).Msgf(
-			"ReadDS(): error sending READ after initial response")
-		return nil, err
+	if len(data) != 8 {
+		return nil, fmt.Errorf("Read(): got %d bytes of data, expected 8",
+			len(data))
 	}
 
 	resultCode := binary.BigEndian.Uint32(data[0:4])
 	if resultCode != 0 {
 		additionalCode := binary.BigEndian.Uint32(data[4:8])
-		log.Info().Msgf("ReadDS(): unsuccessful result code: %02x/%02x",
+		log.Info().Msgf("Read(): unsuccessful result code: %02x/%02x",
 			resultCode, additionalCode)
 		return nil, fmt.Errorf("unsuccessful result code: %02x/%02x",
 			resultCode, additionalCode)
 	}
 
 	var entries [][]byte
+	var i int
 	for {
-		// Wait for a CONTROL command
-		cmd, _, _, err := c.ctcdata.Read()
+		i++
+		log.Debug().Msgf("Read(): reading record %d", i)
+		data, err := c.ctcdata.SenseRead()
 		if err != nil {
-			log.Error().Err(err).Msg("error during ctcdata.Read() while " +
-				"awaiting CONTROL for entry in ReadDS()")
-			return nil, err
-		}
-		if cmd != ctc.CTCCmdControl {
-			errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
-				"during ctcdata.Read() entry read, got %02x", cmd)
-			log.Error().Msg(errmsg)
-			return nil, errors.New(errmsg)
-		}
-
-		// Send a SENSE command in response
-		if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
-			log.Error().Err(err).Msg(
-				"error trying to read entry SENSE from ctcdata in ReadDS()")
-			return nil, err
-		}
-
-		// Read the entry
-		cmd, count, data, err := c.ctcdata.Read()
-		if err != nil {
-			log.Info().Err(err).Msg("ReadDS(): error reading entry")
-			return nil, err
-		}
-		log.Debug().
-			Hex("command", []byte{byte(cmd)}).
-			Uint16("count", count).
-			Hex("data", data).
-			Msg("ReadDS(): read entry")
-		// Now send our READ command to indicate we've read the response
-		if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
-			log.Error().Err(err).Msg(
-				"ReadDS(): error sending READ after reading entry")
 			return nil, err
 		}
 
@@ -551,60 +379,21 @@ func (c *ctcapi) Submit(jcl []string) (string, error) {
 
 	recordCountBytes := binary.BigEndian.AppendUint32(nil, uint32(len(jcl)))
 	if err := c.sendCommand(opSubmit, recordCountBytes); err != nil {
-		log.Error().Err(err).Msg("sendCommand() error in Submit()")
 		return "", err
 	}
 
-	// Wait for a CONTROL command
-	log.Debug().Msg("Submit(): awaiting CONTROL command")
-	cmd, _, _, err := c.ctcdata.Read()
+	data, err := c.ctcdata.SenseRead()
 	if err != nil {
-		log.Error().Err(err).Msg("error during ctcdata.Read() while " +
-			"awaiting CONTROL in Submit()")
-		return "", err
+		return "", fmt.Errorf("Submit(): couldn't perform SenseRead(): %v",
+			err)
 	}
-	if cmd != ctc.CTCCmdControl {
-		errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
-			"during ctcdata.Read(), got %02x", cmd)
-		log.Error().Msg(errmsg)
-		return "", errors.New(errmsg)
-	}
-
-	// Send a SENSE command in response
-	log.Debug().Msg("Submit(): sending SENSE command")
-	if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
-		log.Error().Err(err).Msg(
-			"error trying to read SENSE from ctcdata in Submit()")
-		return "", err
-	}
-
-	// Read the initial response
-	log.Debug().Msg("Submit(): reading the initial response")
-	cmd, count, data, err := c.ctcdata.Read()
-	if err != nil {
-		log.Error().Err(err).Msgf(
-			"error during ctcdata.Read() in Submit()")
-		return "", err
-	}
-	log.Debug().
-		Hex("command", []byte{byte(cmd)}).
-		Uint16("count", count).
-		Hex("data", data).
-		Msg("Submit(): initial response")
-
-	// Now send our READ command to indicate we've read the response
-	log.Debug().Msg(
-		"Submit(): sending READ to indicate we've read initial response")
-	if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
-		log.Error().Err(err).Msgf(
-			"Submit(): error sending READ after initial response")
-		return "", err
+	if len(data) != 4 {
+		return "", fmt.Errorf("got %d bytes in intial response, expected 4",
+			len(data))
 	}
 
 	resultCode := binary.BigEndian.Uint32(data[0:4])
 	if resultCode != 0 {
-		log.Error().Msgf("Submit(): unsuccessful result code: %02x",
-			resultCode)
 		return "", fmt.Errorf("unsuccessful result code: %02x",
 			resultCode)
 	}
@@ -620,103 +409,21 @@ func (c *ctcapi) Submit(jcl []string) (string, error) {
 		}
 		copy(padded, e)
 
-		// Send CONTROL to get the server's attention.
-		log.Debug().Msgf("Submit(): sending CONTROL for JCL record %d", i+1)
-		if err := c.ctccmd.Send(ctc.CTCCmdControl, 1, nil); err != nil {
-			log.Error().Err(err).Msgf("Submit(): couldn't send CONTROL")
-			return "", err
-		}
-
-		// Expect a SENSE command in response.
-		log.Debug().Msgf("Submit(): awaiting SENSE in response to CONTROL")
-		cmd, _, _, err := c.ctccmd.Read()
-		if err != nil {
-			log.Error().Err(err).Msgf(
-				"Submit(): couldn't READ while awaiting SENSE")
-			return "", err
-		}
-		if cmd != ctc.CTCCmdSense {
-			log.Error().Msgf("Submit(): expected SENSE but got %02x.", cmd)
-			return "", fmt.Errorf("Submit(): expected SENSE but got %02x",
-				cmd)
-		}
-
-		// Putting this brief pause between doing the control/sense then the
-		// write seems to eliminate an intermittent condition during stress
-		// testing on my system where we get the sense from Hercules/MVS, but
-		// then either Hercules or MVS never picks up the write state change.
-		time.Sleep(10 * time.Millisecond)
-
-		// Send the record
-		log.Debug().Msgf("Sending JCL record %d", i+1)
-		if err := c.ctccmd.Send(ctc.CTCCmdWrite, 80, padded); err != nil {
-			log.Info().Err(err).Msgf(
-				"Submit(): error sending READ for input record %d", i+1)
-			return "", err
-		}
-		// Expect the corresponding READ command from the other side
-		log.Debug().Msgf("Awaiting READ after write")
-		cmd, _, _, err = c.ctccmd.Read()
-		if err != nil {
-			log.Info().Err(err).Msgf(
-				"Submit(): error reading CTC READ after input record %d", i+1)
-			return "", err
-		}
-		if cmd != ctc.CTCCmdRead {
-			err = fmt.Errorf(
-				"Submit(): expected READ, but got %02x after input record %d",
-				cmd, i+1)
-			log.Info().Msgf("%v", err)
-			return "", err
+		log.Debug().Msg("Submit(): sending JCL record")
+		if err := c.ctccmd.ControlWrite(padded); err != nil {
+			return "", fmt.Errorf("error writing JCL record: %v", err)
 		}
 
 		// We also expect a response on the data channel
-		// Wait for a CONTROL command
-		log.Debug().Msg("Submit(): awaiting data on ctcdata after JCL line")
-		cmd, _, _, err = c.ctcdata.Read()
+		log.Debug().Msg("Submit(): reading response")
+		data, err := c.ctcdata.SenseRead()
 		if err != nil {
-			log.Error().Err(err).Msg("error during ctcdata.Read() while " +
-				"awaiting CONTROL after record in Submit()")
-			return "", err
-		}
-		if cmd != ctc.CTCCmdControl {
-			errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
-				"during ctcdata.Read() record response read, got %02x", cmd)
-			log.Error().Msg(errmsg)
-			return "", errors.New(errmsg)
-		}
-
-		// Send a SENSE command in response
-		log.Debug().Msg("Submit(): sending SENSE")
-		if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
-			log.Error().Err(err).Msg(
-				"error trying to send SENSE to ctcdata in Submit()")
-			return "", err
-		}
-
-		// Read the response
-		cmd, count, data, err := c.ctcdata.Read()
-		if err != nil {
-			log.Info().Err(err).Msg("Submit(): error reading record response")
-			return "", err
-		}
-		log.Debug().
-			Hex("command", []byte{byte(cmd)}).
-			Uint16("count", count).
-			Hex("data", data).
-			Msg("Submit(): record response")
-		// Now send our READ command to indicate we've read the response
-		if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
-			log.Error().Err(err).Msg(
-				"Submit(): error sending READ after reading record response")
-			return "", err
+			return "", fmt.Errorf("error reading JCL record response: %v", err)
 		}
 
 		if len(data) != 4 {
-			errmsg := fmt.Errorf("Submit(): unexpected response length: %d",
+			return "", fmt.Errorf("got %d response length, expected 4",
 				len(data))
-			log.Error().Err(err).Send()
-			return "", errmsg
 		}
 		log.Debug().Msgf("Submit(): got response %08x after record %d",
 			data, i)
@@ -731,51 +438,14 @@ func (c *ctcapi) Submit(jcl []string) (string, error) {
 	}
 
 	log.Debug().Msg("Submit(): getting job number")
-
-	// Wait for a CONTROL command
-	cmd, _, _, err = c.ctcdata.Read()
+	data, err = c.ctcdata.SenseRead()
 	if err != nil {
-		log.Error().Err(err).Msg("error during ctcdata.Read() while " +
-			"awaiting CONTROL for job name in Submit()")
-		return "", err
-	}
-	if cmd != ctc.CTCCmdControl {
-		errmsg := fmt.Sprintf("didn't receive expected CONTROL command "+
-			"during ctcdata.Read() job name read, got %02x", cmd)
-		log.Error().Msg(errmsg)
-		return "", errors.New(errmsg)
-	}
-
-	// Send a SENSE command in response
-	if err := c.ctcdata.Send(ctc.CTCCmdSense, 1, nil); err != nil {
-		log.Error().Err(err).Msg(
-			"error trying to read job number SENSE from ctcdata in Submit()")
-		return "", err
-	}
-
-	// Read the response with job number
-	cmd, count, data, err = c.ctcdata.Read()
-	if err != nil {
-		log.Info().Err(err).Msg("Submit(): error reading submission response")
-		return "", err
-	}
-	log.Debug().
-		Hex("command", []byte{byte(cmd)}).
-		Uint16("count", count).
-		Hex("data", data).
-		Msg("Submit(): read final response")
-	// Now send our READ command to indicate we've read the response
-	if err := c.ctcdata.Send(ctc.CTCCmdRead, count, nil); err != nil {
-		log.Error().Err(err).Msg(
-			"Submit(): error sending READ after reading final response")
-		return "", err
+		return "", fmt.Errorf("error reading job number: %v", err)
 	}
 
 	if !(len(data) == 12 || len(data) == 4) {
-		errmsg := fmt.Errorf("Submit(): unexpected final response length %d",
+		return "", fmt.Errorf("unexpected final response length: %d",
 			len(data))
-		log.Error().Msgf("%v", errmsg)
-		return "", errmsg
 	}
 	resultCode = binary.BigEndian.Uint32(data[0:4])
 	if resultCode != 0 {

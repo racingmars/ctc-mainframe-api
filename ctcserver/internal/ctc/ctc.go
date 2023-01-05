@@ -1,6 +1,6 @@
 package ctc
 
-// Copyright 2022 Matthew R. Wilson <mwilson@mattwilson.org>
+// Copyright 2022-2023 Matthew R. Wilson <mwilson@mattwilson.org>
 //
 // This file is part of CTC Mainframe API. CTC Mainframe API is free software:
 // you can redistribute it and/or modify it under the terms of the GNU General
@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -47,6 +48,16 @@ type CTC interface {
 	Connect() error
 	Send(cmd CTCCmd, count uint16, data []byte) error
 	Read() (cmd CTCCmd, count uint16, data []byte, err error)
+
+	// ControlWrite will send a CONTROL, wait for the SENSE from the remote
+	// side to clear the CONTROL, send the data with WRITE, and wait for the
+	// READ from the remote side. Count for the WRITE will be the length of
+	// the data.
+	ControlWrite(data []byte) error
+
+	// SenseWait will await a SENSE, send a CONTROL in response, then perform
+	// a READ, returning the bytes that were read.
+	SenseRead() ([]byte, error)
 }
 
 // ErrAlreadyConnected is the error returned by Connect when at least half of
@@ -403,4 +414,86 @@ func (c *ctc) read() (cmd CTCCmd, count uint16, data []byte, err error) {
 	log.Trace().Hex("data", data).Msg("READ")
 
 	return cmd, count, data, nil
+}
+
+// ControlWrite will send a CONTROL, wait for the SENSE from the remote side
+// to clear the CONTROL, send the data with WRITE, and wait for the READ from
+// the remote side. Count for the WRITE will be the length of the data.
+func (c *ctc) ControlWrite(data []byte) error {
+	log.Debug().Msg("ctc.ControlWrite(): sending CONTROL")
+	if err := c.Send(CTCCmdControl, 1, nil); err != nil {
+		return fmt.Errorf("couldn't send CONTROL: %v", err)
+	}
+
+	// Expect a SENSE command in response.
+	log.Debug().Msg("ctc.ControlWrite(): awaiting SENSE")
+	cmd, _, _, err := c.Read()
+	if err != nil {
+		return fmt.Errorf("couldn't read while awaiting SENSE: %v", err)
+	}
+	if cmd != CTCCmdSense {
+		return fmt.Errorf("expected SENSE but got %02x", cmd)
+	}
+
+	// Putting this brief pause between doing the control/sense then the
+	// write seems to eliminate an intermittent condition during stress
+	// testing on my system where we get the sense from Hercules/MVS, but
+	// then either Hercules or MVS never picks up the write state change.
+	time.Sleep(10 * time.Millisecond)
+	log.Debug().Msg("ctc.ControlWrite: sending WRITE")
+	if err := c.Send(CTCCmdWrite, uint16(len(data)), data); err != nil {
+		return fmt.Errorf("couldn't send WRITE: %v", err)
+	}
+
+	// Expect the corresponding READ command from the other side
+	log.Debug().Msg("ctc.ControlWrite(): awaiting READ")
+	cmd, _, _, err = c.Read()
+	if err != nil {
+		return fmt.Errorf("couldn't read while awaiting READ: %v", err)
+	}
+	if cmd != CTCCmdRead {
+		return fmt.Errorf("expected READ, but got %02x", cmd)
+	}
+
+	return nil
+}
+
+// SenseWait will await a SENSE, send a CONTROL in response, then perform a
+// READ, returning the bytes that were read.
+func (c *ctc) SenseRead() ([]byte, error) {
+	log.Debug().Msg("ctc.SenseRead(): awaiting CONTROL")
+	cmd, _, _, err := c.Read()
+	if err != nil {
+		return nil, fmt.Errorf("couldn't read while awaiting CONTROL: %v", err)
+	}
+	if cmd != CTCCmdControl {
+		return nil, fmt.Errorf("expected CONTROL, but got %02x", cmd)
+	}
+
+	// Send a SENSE command in response
+	log.Debug().Msg("ctc.SenseRead(): sending SENSE")
+	if err := c.Send(CTCCmdSense, 1, nil); err != nil {
+		return nil, fmt.Errorf("couldn't send SENSE: %v", err)
+	}
+
+	// Read the data
+	log.Debug().Msg("ctc.SenseRead(): reading data")
+	cmd, count, data, err := c.Read()
+	if err != nil {
+		return nil, fmt.Errorf("couldn't read data: %v", err)
+	}
+	log.Debug().
+		Hex("command", []byte{byte(cmd)}).
+		Uint16("count", count).
+		Hex("data", data).
+		Msg("data read from CTC adapter")
+	if cmd != CTCCmdWrite {
+		return data, fmt.Errorf("expected WRITE, but got %02x", cmd)
+	}
+	// Now send our READ command to indicate we've read the response
+	if err := c.Send(CTCCmdRead, count, nil); err != nil {
+		return data, fmt.Errorf("couldn't send READ in respone to WRITE")
+	}
+
+	return data, nil
 }

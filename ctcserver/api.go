@@ -1,6 +1,6 @@
 package main
 
-// Copyright 2022 Matthew R. Wilson <mwilson@mattwilson.org>
+// Copyright 2022-2023 Matthew R. Wilson <mwilson@mattwilson.org>
 //
 // This file is part of CTC Mainframe API. CTC Mainframe API is free software:
 // you can redistribute it and/or modify it under the terms of the GNU General
@@ -34,6 +34,8 @@ func (app *api) dslist(c echo.Context) error {
 
 	results, err := app.ctcapi.GetDSList(prefix)
 	if err != nil {
+		log.Error().Err(err).Msgf("CTC API error reading dslist for '%s'",
+			prefix)
 		return c.JSON(http.StatusInternalServerError,
 			errorResponse{Error: err.Error()})
 	}
@@ -46,6 +48,8 @@ func (app *api) mbrlist(c echo.Context) error {
 
 	results, err := app.ctcapi.GetMemberList(pdsName)
 	if err != nil {
+		log.Error().Err(err).Msgf("CTC API error reading member list for '%s'",
+			pdsName)
 		return c.JSON(http.StatusInternalServerError,
 			errorResponse{Error: err.Error()})
 	}
@@ -64,6 +68,7 @@ func (app *api) read(c echo.Context) error {
 
 	results, err := app.ctcapi.Read(dsn, raw)
 	if err != nil {
+		log.Error().Err(err).Msgf("CTC API error reading dataset '%s'", dsn)
 		return c.JSON(http.StatusInternalServerError,
 			errorResponse{Error: err.Error()})
 	}
@@ -101,6 +106,7 @@ func (app *api) submit(c echo.Context) error {
 
 	result, err := app.ctcapi.Submit(records)
 	if err != nil {
+		log.Error().Err(err).Msg("CTC API error submitting job")
 		return c.JSON(http.StatusInternalServerError,
 			errorResponse{Error: err.Error()})
 	}
@@ -112,6 +118,7 @@ func (app *api) submit(c echo.Context) error {
 func (app *api) quit(c echo.Context) error {
 	err := app.ctcapi.Quit()
 	if err != nil {
+		log.Error().Err(err).Msg("CTC API error sending quit command")
 		return c.JSON(http.StatusInternalServerError,
 			errorResponse{Error: err.Error()})
 	}

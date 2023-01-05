@@ -1,6 +1,6 @@
 package ctcapi
 
-// Copyright 2022 Matthew R. Wilson <mwilson@mattwilson.org>
+// Copyright 2022-2023 Matthew R. Wilson <mwilson@mattwilson.org>
 //
 // This file is part of CTC Mainframe API. CTC Mainframe API is free software:
 // you can redistribute it and/or modify it under the terms of the GNU General
@@ -13,11 +13,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"sync"
-	"time"
-
-	"github.com/rs/zerolog/log"
 
 	"github.com/racingmars/ctc-mainframe-api/ctcserver/internal/ctc"
+	"github.com/rs/zerolog/log"
 )
 
 type CTCAPI interface {
@@ -53,27 +51,8 @@ func New(ctccmd, ctcdata ctc.CTC) CTCAPI {
 }
 
 func (c *ctcapi) sendCommand(op opcode, param []byte) error {
-	// Send CONTROL to get the server's attention.
-	if err := c.ctccmd.Send(ctc.CTCCmdControl, 1, nil); err != nil {
-		return err
-	}
-
-	// Expect a SENSE command in response.
-	cmd, _, _, err := c.ctccmd.Read()
-	if err != nil {
-		return err
-	}
-	if cmd != ctc.CTCCmdSense {
-		log.Error().Msgf("expected SENSE but got %02x.", cmd)
-	}
-
-	// Putting this brief pause between doing the control/sense then the write
-	// seems to eliminate an intermittent condition during stress testing on
-	// my system where we get the sense from Hercules/MVS, but then either
-	// Hercules or MVS never picks up the write state change.
-	time.Sleep(25 * time.Millisecond)
-
-	// Send the WRITE with the command line
+	// Build the command buffer -- pad the parameter to 255 length w/ EBCDIC
+	// spaces
 	var buf bytes.Buffer
 	buf.WriteByte(byte(op))
 	binary.Write(&buf, binary.BigEndian, uint16(len(param)))
@@ -81,18 +60,10 @@ func (c *ctcapi) sendCommand(op opcode, param []byte) error {
 	copy(parampadded, param)
 	buf.Write(parampadded)
 
-	if err := c.ctccmd.Send(ctc.CTCCmdWrite, uint16(buf.Len()),
-		buf.Bytes()); err != nil {
+	// Send it with a CONTROL+WRITE
+	log.Debug().Msgf("Sending opcode %02x with param %x")
+	if err := c.ctccmd.ControlWrite(buf.Bytes()); err != nil {
 		return err
-	}
-
-	// And now expect a READ command in response
-	cmd, _, _, err = c.ctccmd.Read()
-	if err != nil {
-		return err
-	}
-	if cmd != ctc.CTCCmdRead {
-		log.Error().Msgf("expected READ but got %02x", cmd)
 	}
 
 	return nil
