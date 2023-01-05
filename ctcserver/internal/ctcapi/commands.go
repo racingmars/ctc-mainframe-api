@@ -41,7 +41,7 @@ var dsnameRegex = regexp.MustCompile(
 var dsnameOptionalMemberRegex = regexp.MustCompile(
 	`^([a-zA-Z$#@-][a-zA-Z0-9$#@-]{0,7}` +
 		`(?:\.[a-zA-Z$#@-][a-zA-Z0-9$#@-]{0,7})*)` +
-		`(?:\(([a-zA-Z$#@-][a-zA-Z0-9$#@-]{1,8})\))?$`)
+		`(?:\(([a-zA-Z$#@-][a-zA-Z0-9$#@-]{0,7})\))?$`)
 
 func (c *ctcapi) GetDSList(basename string) ([]DSInfo, error) {
 	if len(basename) > 44 {
