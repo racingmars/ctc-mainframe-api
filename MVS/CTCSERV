@@ -61,8 +61,12 @@ CHK03    CLI   CMDOPCD,X'03'    Did we receive the READ command?
          CALL  READ,(CTCCMD,CTCDATA,CMDIN)     Yes, do it
          B     SENSLOOP
 CHK04    CLI   CMDOPCD,X'04'    Did we receive the SUBMIT command?
-         BNE   CHKFF            No, go to next check
+         BNE   CHK05            No, go to next check
          CALL  SUBMIT,(CTCCMD,CTCDATA,CMDIN)   Yes, do it
+         B     SENSLOOP
+CHK05    CLI   CMDOPCD,X'05'    Did we receive the WRITE command?
+         BNE   CHKFF            No, go to next check
+         CALL  WRITEDS,(CTCCMD,CTCDATA,CMDIN)   Yes, do it
          B     SENSLOOP
 CHKFF    CLI   CMDOPCD,X'FF'    Did we receive the quit command?
          BE    QUITCMD          Yes

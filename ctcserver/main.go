@@ -1,6 +1,6 @@
 package main
 
-// Copyright 2022 Matthew R. Wilson <mwilson@mattwilson.org>
+// Copyright 2022-2023 Matthew R. Wilson <mwilson@mattwilson.org>
 //
 // This file is part of CTC Mainframe API. CTC Mainframe API is free software:
 // you can redistribute it and/or modify it under the terms of the GNU General
@@ -120,6 +120,7 @@ func realMain(configPath string) int {
 	e.GET("/api/mbrlist/:pdsName", app.mbrlist)
 	e.GET("/api/read/:dsn", app.read)
 	e.POST("/api/submit", app.submit)
+	e.POST("/api/write/:dsn", app.write)
 	e.GET("/api/quit", app.quit)
 
 	// Run it

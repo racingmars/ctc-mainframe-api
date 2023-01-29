@@ -55,6 +55,8 @@ type CTC interface {
 	// the data.
 	ControlWrite(data []byte) error
 
+	NakedWrite(data []byte) error
+
 	// SenseWait will await a SENSE, send a CONTROL in response, then perform
 	// a READ, returning the bytes that were read.
 	SenseRead() ([]byte, error)
@@ -448,6 +450,28 @@ func (c *ctc) ControlWrite(data []byte) error {
 	// Expect the corresponding READ command from the other side
 	log.Debug().Msg("ctc.ControlWrite(): awaiting READ")
 	cmd, _, _, err = c.Read()
+	if err != nil {
+		return fmt.Errorf("couldn't read while awaiting READ: %v", err)
+	}
+	if cmd != CTCCmdRead {
+		return fmt.Errorf("expected READ, but got %02x", cmd)
+	}
+
+	return nil
+}
+
+// NakedWrite will send the data with WRITE, and wait for the READ from
+// the remote side. Count for the WRITE will be the length of the data.
+func (c *ctc) NakedWrite(data []byte) error {
+
+	log.Debug().Msg("ctc.NakedWrite: sending WRITE")
+	if err := c.Send(CTCCmdWrite, uint16(len(data)), data); err != nil {
+		return fmt.Errorf("couldn't send WRITE: %v", err)
+	}
+
+	// Expect the corresponding READ command from the other side
+	log.Debug().Msg("ctc.ConNakedWritetrolWrite(): awaiting READ")
+	cmd, _, _, err := c.Read()
 	if err != nil {
 		return fmt.Errorf("couldn't read while awaiting READ: %v", err)
 	}

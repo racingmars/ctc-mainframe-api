@@ -112,7 +112,29 @@ func (app *api) submit(c echo.Context) error {
 	}
 
 	return c.String(http.StatusOK, result)
+}
 
+func (app *api) write(c echo.Context) error {
+	dsn := c.Param("dsn")
+	var records []string
+	scanner := bufio.NewScanner(c.Request().Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		log.Trace().Msgf("Scanned one record: %s", line)
+		records = append(records, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	err := app.ctcapi.Write(dsn, records)
+	if err != nil {
+		log.Error().Err(err).Msg("CTC API error writing dataset")
+		return c.JSON(http.StatusInternalServerError,
+			errorResponse{Error: err.Error()})
+	}
+
+	return c.String(http.StatusOK, "dataset successfully saved")
 }
 
 func (app *api) quit(c echo.Context) error {

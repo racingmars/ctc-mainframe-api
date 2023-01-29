@@ -1,0 +1,454 @@
+***********************************************************************
+* MVS SERVICES OVER CTC - WRITE Command (0x05)                        *
+*                                                                     *
+* Copyright 2023 Matthew R. Wilson <mwilson@mattwilson.org>           *
+*                                                                     *
+* This file is part of CTC Mainframe API. CTC Mainframe API is free   *
+* software: you can redistribute it and/or modify it under the terms  *
+* of the GNU General Public License as published by the Free Software *
+* Foundation, either version 3 of the license, or (at your option)    *
+* any later version.                                                  *
+***********************************************************************
+*
+         PRINT GEN
+WRITEDS  CSECT
+         SAVE  (14,12),,*       Save caller's registers
+         BALR  R12,0            Load current address
+         USING *,R12            Establish addressability
+         ST    R13,SAVEAREA+4   Store caller's savearea address
+         LA    R13,SAVEAREA     Load address of our savearea
+**********************************************************************
+* COMMAND: WRITE (0x05)                                              *
+* First 44 bytes of command parameter will be the name of the data-  *
+* set to write. The following 8 bytes is the optional member name if *
+* it's a PDS. If not requesting a PDS member, the first byte of the  *
+* member name must be a space.                                       *
+*                                                                    *
+* If the dataset exists, and if a member name is requested, if the   *
+* dataset is a PDS, and if the dataset has fixed length records,     *
+* we will reply with an "OK" response and the record length of the   *
+* dataset.                                                           *
+*                                                                    *
+* At that point, the caller will respond with an "intent to proceed" *
+* and number of records response, or a "cancel" response (e.g. if    *
+* the records the caller was planning on sending are too long for    *
+* the dataset's record length.                                       *
+*                                                                    *
+* If the caller proceeds, we will loop until the record count is 0,  *
+* reading one record from the CTC adapter at a time and putting it   *
+* into the dataset. After the counter gets to 0, we will close the   *
+* dataset.                                                           *
+**********************************************************************
+* Copy parameter list addresses
+         MVC   CTCCMDAD,0(R1)   Address of CTCCMD DCB
+         MVC   CTCDTAAD,4(R1)   Address of CTCDATA DCB
+         MVC   CMDINAD,8(R1)    Address of command input data
+* Check that the parameter (dataset+mbr name) length is 52 bytes
+         L     R2,CMDINAD       Get address of command input data
+         L     R1,0(,R2)        Get command parameter length
+         N     R1,CMDLNMSK      Mask out the command param length
+         SRL   R1,8             Shift right 8 bits
+         LA    R3,52            R3 = 52
+         CLR   R1,R3            Length = 52?
+         BNE   BADLEN           No, bail out
+* Get the DSNAME and member name from the command input area
+         MVC   DYNDSN,3(R2)
+         MVC   DYNMBR,47(R2)
+* Reset put error status code from any prior invocations
+         XC    PUTERROR,PUTERROR Reset PUTERROR to 0
+*
+* Before we try to write a dataset, we will first locate it in the
+* catalog then read the DSCB from the volume's VTOC. We want to check
+* if it's a supported type (non-VSAM, PS or PO, fixed record length)
+* and if a member name is provided, that the dataset is PO.
+*
+* LOCATE the dataset in the catalog.
+         LOCATE LOCCMLST        LOCATE the dataset name in the catalog
+         LTR   R15,R15          Success?
+         BNZ   LOCERR           ...no, return the condition code
+* OBTAIN the DSCB
+         MVC   OBTVOLSR,LOCWRK+6 Copy 1st volume serial # to our OBTAIN
+         OBTAIN OBTCMLST        Get the DSBC for the dataset
+         LTR   R15,R15          Successful completion?
+         BNZ   LOCERR           ...no, return the condition code
+* Make sure we got a format-1 DSCB
+         LA    R1,DSCBAREA      Get the address of our DSCB data
+         CLI   0(R1),X'F1'      Is this a format-1 DSCB?
+         BNE   FMTERR           ...no, report format error
+* Now we check if the dataset is PO or PS
+         CLI   DYNMBR,C' '      Is first character of member name ' '?
+         BNE   CHKPO            ...no, check that DSORG is PO
+CHKPS    NI    38(R1),X'40'     ...yes, check that DSORG is PS
+         BZ    FMTERR              ...no, org of dataset is unsup.
+         B     CHKORG              ...yes, DSORG=PS
+CHKPO    NI    38(R1),X'02'     Check that DSORG is PO
+         BZ    FMTERR           ...no, organization of dataset is unsup
+CHKORG   NI    40(R1),X'80'     Fixed recln?
+         BZ    FMTERR           ...no, dataset is unsupported
+*
+* At this point, we think we have a dataset that is supported and
+* matches the user's request.
+*
+* Since we don't know the DSNAME of the dataset ahead of time, we need
+* to dynamically allocate the dataset at runtime using the DYNALLOC /
+* SVC99 capability of MVS. Building our dynamic allocation request
+* block here is modeled on the example beginning on page 74 of
+* GC28-0627-2, OS/VS2 MVS System Programming Library: Job Management.
+*
+* Get storage for our dynamic allocation SVC 99 request
+STORSIZE EQU   200              200 bytes is well more than we need
+         LA    R0,STORSIZE
+         GETMAIN R,LV=(R0)      Get the storage necessary
+         ST    R1,DYNAREA       Save the address to DYNAREA
+         XC    0(STORSIZE,R1),0(R1) Zero out the memory
+* ...and build the request block (RB)
+         LR    R8,R1            Save the address to R8
+         USING S99RBP,R8        Addressability for RBPTR DSECT
+         LA    R4,S99RBPTR+4    Point 4 bytes beyond start of RBPTR
+         USING S99RB,R4         Addressability for RB DSECT
+         ST    R4,S99RBPTR      Point RBPTR to RB
+         OI    S99RBPTR,S99RBPND Turn on the high order bit in RBPTR
+         XC    S99RB(RBLEN),S99RB Zero out RB
+         MVI   S99RBLN,RBLEN    Put the length of RB in its length fld
+         MVI   S99VERB,S99VRBAL Set verb to allocation function
+         LA    R5,S99RB+RBLEN   Point 20 bytes beyond start of RB
+         USING S99TUPL,R5       Addressability for text unit ptrs
+         ST    R5,S99TXTPP      Init text points address in RB
+         LA    R6,S99TUPL+20    Point just past 5 text pointers
+         USING S99TUNIT,R6      Addressability for 1st text unit
+* Text Unit 1 - DALRTDDN (Return DDNAME)
+         ST    R6,S99TUPTR      Point 1st TU ptr to 1st TU
+         LA    R7,DALRTDDN      Get the key for DDNAME
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,1             Set count = 1
+         STH   R7,S99TUNUM      Set count = 1
+         LA    R7,8             DDNAMEs may be up to 8 characters long
+         STH   R7,S99TULNG      ...and put it in the TU length field
+         LA    R1,S99TUPAR      Get addr where the DDNAME will end up
+         ST    R1,DDN           ...and save to storage
+* Text Unit 2 - DSNAME
+         LA    R6,S99TUNIT+14   Point just past 1st text unit
+         LA    R5,S99TUPL+4     Point to the 2nd text unit ptr in list
+         ST    R6,S99TUPTR      Point 2nd TU ptr to 2nd TU
+         LA    R7,DALDSNAM      Get the key for DSNAME
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,1             Set count = 1
+         STH   R7,S99TUNUM      Set count = 1
+* We will copy up to 44 characters, but we need to provide the real
+* count this time because space padding on the end doesn't work when
+* there's potentially a member name involved.
+         LA    R9,C' '          R9 = space character
+         LA    R2,DYNDSN        R2 = address of DYNDSN
+         LA    R10,0            R10 = 0
+         LA    R11,1            R11 = 1
+FINDSPC  CLM   R9,1,0(R2)       Is DYNDSN[R10] = ' '?
+         BE    FOUNDIT          ...yes
+         AR    R10,R11          ...no, R10 = R10+1
+         AR    R2,R11            ...and R2 = R2 + 1
+         B     FINDSPC
+FOUNDIT  STH   R10,S99TULNG     ...yes, put length in the TU len fld
+         MVC   S99TUPAR(L'DYNDSN),DYNDSN Put the DSNAME into parm fld
+* Text Unit 3 - STATUS (set to OLD)
+         LA    R6,S99TUNIT+6+L'DYNDSN Point just past 2nd text unit
+         LA    R5,S99TUPL+4     Point to the 3rd text unit ptr in list
+         ST    R6,S99TUPTR      Point 3rd TU ptr to 3rd TU
+         LA    R7,DALSTATS      Get the key for status specification
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,1             Set count = 1
+         STH   R7,S99TUNUM      Set count = 1
+         STH   R7,S99TULNG      Set length = 1
+         MVI   S99TUPAR,X'01'   Set parm to OLD
+* Text Unit 4 - CLOSE - deallocate at close
+         LA    R6,S99TUNIT+7    Point just past 3rd text unit
+         LA    R5,S99TUPL+4     Point to the 4rd text unit ptr in list
+         ST    R6,S99TUPTR      Point 4rd TU ptr to 4rd TU
+         LA    R7,DALCLOSE      Get the key for status specification
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,0             Set count = 0
+         STH   R7,S99TUNUM      Set count = 0
+* Do we need to add member name text unit?
+         CLI   DYNMBR,C' '      Is member name blank?
+         BNE   TUMEMBER         ...no, add the member name text unit
+         OI    S99TUPTR,S99TUPLN Turn on high bit to indicate last ptr
+         B     SKIPMBR
+* Text Unit 5 - member name
+TUMEMBER LA    R6,S99TUNIT+4    Point just past 4th text unit
+         LA    R5,S99TUPL+4     Point to the 5th text unit ptr in list
+         ST    R6,S99TUPTR      Point 5th TU ptr to 5th TU
+         LA    R7,DALMEMBR      Get the key for member name
+         STH   R7,S99TUKEY      Put the key in the text unit key field
+         LA    R7,1             Set count = 1
+         STH   R7,S99TUNUM      Set count = 1
+         LA    R7,L'DYNMBR      Set length = 8
+         STH   R7,S99TULNG      Set length = 8
+         MVC   S99TUPAR(L'DYNMBR),DYNMBR Set member name
+         OI    S99TUPTR,S99TUPLN Turn on high bit to indicate last ptr
+* Done building dynamic allocation request
+SKIPMBR  EQU   *
+         DROP  R4,R5,R6,R8
+         LR    R1,R8            Put request block ptr in R1
+         DYNALLOC               Invoke DYNALLOC to process request
+         LTR   R15,R15          DYNALLOC return code
+         BNZ   SVC99ERR         ...was not successful
+* Prepare our DCB with the default values
+         MVC   DYNDCB(DCBLEN),MDLDCB
+* Copy the DDNAME to our DCB
+         L     R1,DDN           Get address of DDNAME param
+         MVC   DYNDCB+40(8),0(R1) Copy the DDNAME
+         LA    R4,STORSIZE
+         L     R5,DYNAREA
+         FREEMAIN R,LV=(R4),A=(R5) Free our storage
+* Tell the caller about the successful allocation and return the LRECL
+* of the allocated dataset.
+         XC    RESPCODE,RESPCODE Set RESPCODE to 0 for "ok"
+         LH    R10,DSCBAREA+44   R10 = LRECL
+         ST    R10,RESPCOD2      Store the LRECL into RESPCODE2
+         ST    R10,RECL          ...and into RECL
+         GETMAIN R,LV=(R10)     Get memory of LRECL length
+         ST    R1,GETAREA       Save the address to GETAREA
+* Send the initial response
+         LA    R9,WRTCCW1       Load address of WRTCCW1 to R9
+         ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
+         L     R9,CTCDTAAD      Load address of CTCDATA DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to our DCB
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   WRITERR          ...No, bail out
+* Read "proceed" or "abort" from command channel
+         L     R9,CTCCMDAD      Load address of CTCCMD DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to our DCB
+         LA    R9,WRTCCW2       Load address of our "read" WRTCCW2
+         ST    R9,IOBCCWAD      Point our IOB to our READ CCW
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   READERR          ...No, bail out
+* Check if caller intends to proceed
+         L     R9,RESPCODE      Load the caller's response status word
+         LTR   R9,R9            Check the value in R9
+         BNZ   ABORT            Caller didn't use 0 "intent to proceed"
+* Proceed. Get the number of records the caller intends to send
+         L     R8,RESPCOD2       R8 = # of records
+         OPEN  (DYNDCB,(OUTPUT)) Open the output dataset
+* Send "okay to proceed" to caller
+         L     R9,CTCDTAAD      Load address of CTCDAT DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to the CTCDAT DCB
+         LA    R9,WRTCCW1       Load address of our WRITE CCW
+         ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
+         LA    R9,0             Load OK result code
+         ST    R9,RESPCODE      Store it in the response buffer
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   WRITERR          ...No, bail out
+* Set up for loop over each record
+         L     R10,RECL         R10 = LRECL
+         STH   R10,WRTCCW3+6    Set CCW length to LRECL
+         L     R1,GETAREA       R1 = address of our buffer storage
+         ST    R1,WRTCCW3       Save the address to our CCW
+         LA    R1,READ          ...restore the CCW command byte
+         STC   R1,WRTCCW3       ...restore the CCW command byte
+* While record count > 0, read a record from the CTC adapter,
+* write it to the dataset, and send the "ok" (hopefully)
+* response over the CTC adapter.
+LOOP     L     R9,CTCCMDAD      Load address of CTCCMD DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to the CTCCMD DCB
+         LA    R9,WRTCCW4       Load address of our SENSE CCW
+         ST    R9,IOBCCWAD      Point our IOB to our SENSE CCW
+SENSLOOP XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our SENSE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   SENSERR          ...No, bail out
+         CLI   SENSEREC,CONTROL Did we sense a CONTROL command?
+         BNE   SLEEP            No, sleep and retry
+         B     DOREAD           Yes, do the read now
+SLEEP    STIMER WAIT,BINTVL=SLPTIM Sleep for 10ms
+         B     SENSLOOP            ...then retry sense
+DOREAD   LA    R9,WRTCCW3       Load address of our READ CCW
+         ST    R9,IOBCCWAD      Point our IOB to our READ CCW
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our READ command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   READERR          ...No, bail out
+         L     R9,GETAREA       Load address of the record buffer
+         PUT   DYNDCB,(R9)      Write the record to the dataset
+         L     R15,PUTERROR     Load the result our SYNAD handler set
+         LTR   R15,R15          Success?
+         BNZ   PUTERR           ...No, bail out
+         L     R9,CTCDTAAD      Load address of CTCDAT DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to the CTCDAT DCB
+         LA    R9,WRTCCW1       Load address of our WRITE CCW
+         ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
+         LA    R9,0             Load OK result code
+         ST    R9,RESPCODE      Store it in the response buffer
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   WRITERR          ...No, bail out
+         BCT   R8,LOOP          Decrement count and loop if not 0
+         B     DONE             ...Yes, we're done
+ABORT    OPEN  (DYNDCB,(INPUT))
+         B     DONE
+*
+* Handle various errors and send unsuccessful result code
+BADLEN   LA    R9,X'F0'         Invalid DS length = 0xF0
+         B     SENDERR
+LOCERR   ST    R15,RESPCOD2     Move the LOCATE/OBTAIN result RESPCOD2
+         LA    R9,X'F1'         Dataset locate error = 0xF1
+         B     SENDERR
+FMTERR   LA    R9,X'F2'         Requested DS is not supported
+         B     SENDERR
+READERR  LA    R9,X'F5'         Error during CTC READ
+         B     SENDERR
+PUTERR   LA    R9,X'F6'         Error during access method PUT
+         B     SENDERR
+SENSERR  LA    R9,X'F7'         Error during CTC SESNE
+         B     SENDERR
+SVC99ERR LA    R9,X'F3'         Dynamic allocation error
+         B     CLEANUP
+CLEANUP  LA    R4,STORSIZE
+         L     R5,DYNAREA
+         FREEMAIN R,LV=(R4),A=(R5) Free our storage
+         WTO   'Unsuccessful DYNALLOC during READ'
+         B     SENDERR
+SENDERR  ST    R9,RESPCODE      Save the result code to RESPONSE
+         LA    R9,WRTCCW1       Load address of WRTCCW1 to R9
+         ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
+         L     R9,CTCDTAAD      Load address of CTCDATA DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to our DCB
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BE    QUIT             ...Yes, we can quit
+         WTO   'Unsuccessful CTC WRITE during READ error write'
+         B     QUIT
+WRITERR  WTO   'Unsuccessful CTC WRITE during READ'
+DONE     CLOSE (DYNDCB)
+         FREEPOOL DYNDCB
+*        Send final "success" status
+         L     R9,CTCDTAAD      Load address of CTCDAT DCB to R9
+         ST    R9,IOBDCBAD      Point our IOB to the CTCDAT DCB
+         LA    R9,WRTCCW1       Load address of our WRITE CCW
+         ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
+         LA    R9,0             Load OK result code
+         ST    R9,RESPCODE      Store it in the response buffer
+         XC    EXCPECB,EXCPECB  Clear EXCPECB
+         EXCP  IOB              Run our WRITE command
+         WAIT  ECB=EXCPECB
+         CLI   EXCPECB,X'7F'    Successful completion?
+         BNE   WRITERR          ...No, bail out
+         L     R4,GETAREA
+         L     R5,RECL
+         FREEMAIN R,LV=(R5),A=(R4) Free our record buffer memory
+* Return to caller
+QUIT     L     R13,4(R13)       Restore address of caller's save area
+         LM    R14,R12,12(R13)  Restore caller's registers
+         LA    R15,0            RC=0
+         BR    R14              Return to caller
+* PUT error handling routine
+ERRHAND  LA    R1,1
+         ST    R1,PUTERROR
+         BR    R14
+PUTERROR DC    F'0'
+*
+**********************************************************************
+**********************************************************************
+*
+***** Parameters passed into us
+CTCCMDAD DS    F
+CTCDTAAD DS    F
+CMDINAD  DS    F
+*
+***** Storage and CCWs for WRITE command
+* Initial response
+RESPONSE DS    0F
+RESPCODE DS    F
+RESPCOD2 DC    F'0'
+RESPLEN  EQU   *-RESPONSE
+*
+GETAREA  DS    A
+RECL     DS    F
+SENSEREC DS    CL1
+*
+SAVEAREA DS    18F
+DYNAREA  DS    A
+DDN      DS    A                Address of location of dynamic DDNAME
+DYNDSN   DS    CL44             DSNAME to dynamically allocate
+         DC    C' '             Terminating space (right after DYNDSN
+*                                 for safety)
+DYNMBR   DS    CL8              Member name to dynamically allocate
+DYNDCB   DCB   DDNAME=XXXXXXXX,MACRF=PM,DSORG=PS,SYNAD=ERRHAND
+* Model DCB that we will use to reset the DCB to default state after
+* each use.
+MDLDCB   DCB   DDNAME=XXXXXXXX,MACRF=PM,DSORG=PS,SYNAD=ERRHAND
+DCBLEN   EQU   *-MDLDCB
+* LOCATE and OBTAIN storage
+LOCCMLST CAMLST NAME,DYNDSN,,LOCWRK  Will locate DSNAME in DYNDSN
+LOCWRK   DS    0D
+         DS    265C
+OBTCMLST CAMLST SEARCH,DYNDSN,OBTVOLSR,DSCBAREA
+OBTVOLSR DS    CL6
+DSCBAREA DS    0D
+         DS    CL140
+***********************************************************************
+* Channel programs
+WRTCCW1  CCW   CONTROL,RESPONSE,SLI+CC,1
+         CCW   WRITE,RESPONSE,SLI,RESPLEN
+WRTCCW2  CCW   READ,RESPONSE,SLI,RESPLEN
+WRTCCW3  CCW   READ,0,SLI,1                  0 will be set at runtime
+WRTCCW4  CCW   SENSE,SENSEREC,SLI,1          Send SENSE
+WRITE    EQU   X'01'
+READ     EQU   X'02'
+CONTROL  EQU   X'07'
+SENSE    EQU   X'14'
+SLI      EQU   X'20'
+CC       EQU   X'40'
+* EXCP IOB
+IOB      DS    0F
+IOBFLAGS DC    XL2'0000'
+IOBSENSE DC    XL2'0000'
+IOBECBAD DC    A(EXCPECB)
+IOBCSW   DC    A(0)
+IOBCSWFL DC    XL2'0000'
+IOBRESDL DC    H'00'
+IOBCCWAD DC    A(0)
+IOBDCBAD DC    A(0)
+         DC    F'0'
+         DC    F'0'
+SLPTIM   DC    F'1'
+EXCPECB  DS    F
+* Utility variables
+         DS    0F
+CMDLNMSK DC    X'00FFFF00'      Mask to get the param length
+         PRINT NOGEN
+         IEFZB4D0 ,             DYNALLOC DSECT
+         IEFZB4D2 ,             DYNALLOC symbolic names
+RBLEN    EQU   S99RBEND-S99RB   Length of SVC99 request block (RB)
+**********************************************************************
+* Register symbols                                                   *
+**********************************************************************
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END   WRITEDS

@@ -22,6 +22,7 @@ type CTCAPI interface {
 	GetDSList(basename string) ([]DSInfo, error)
 	GetMemberList(pdsName string) ([]string, error)
 	Read(dsn string, raw bool) ([][]byte, error)
+	Write(dsn string, data []string) error
 	Submit(jcl []string) (string, error)
 	Quit() error
 }
@@ -38,6 +39,7 @@ const (
 	opMbrList opcode = 0x02
 	opRead    opcode = 0x03
 	opSubmit  opcode = 0x04
+	opWrite   opcode = 0x05
 	opQuit    opcode = 0xFF
 )
 

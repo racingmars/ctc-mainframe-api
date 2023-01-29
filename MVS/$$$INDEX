@@ -8,3 +8,4 @@ DSLIST   - (asm) DSLIST  (cmd 0x01) implementation.
 MBRLIST  - (asm) MBRLIST (cmd 0x02) implementation.
 READ     - (asm) READ    (cmd 0x03) implementation.
 SUBMIT   - (asm) SUBMIT  (cmd 0x04) implementation.
+WRITEDS  - (asm) WRITEDS (cmd 0x05) implementation.

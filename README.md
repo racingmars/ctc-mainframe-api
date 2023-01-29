@@ -173,6 +173,25 @@ curl -X POST --data-binary @- http://localhost:8370/api/submit << __EOF__
 __EOF__
 ```
 
+### Write to a dataset
+
+`POST /api/write/<dsn>`
+
+`<dsn>` is the fully-qualified dataset name (optionally including a member name if the dataset is a PDS) to write to. The dataset **must** already be allocated, and it must be a non-VSAM, fixed-record-length PO or PS dataset.
+
+The request body consists of the records to place into the dataset. All existing records in the dataset will be deleted and the new version of the dataset will include only the records provided in the API call. Each record must be less than or equal to the number of characters that the dataset LRECL is allocated with.
+
+For example, to write to a dataset with cURL:
+
+```
+curl -X POST --data-binary @- http://localhost:8370/api/write/HERC01.MEMO(HI) << __EOF__
+Hello from CTC Mainframe API.
+This dataset contents was written via the API call named "write".
+__EOF__
+```
+
+This, of course, assumes that HERC01.MEMO is already allocated as a F or FB, PO dataset with an LRECL >= 65 (to handle the longest line of the input data).
+
 ### Quit
 
 `GET /api/quit`
@@ -239,7 +258,13 @@ something else to try.
 
 Otherwise, it'd be cool to add:
 
- * Writing, instead of just reading, datasets.
+ * Improve the write API call: more detailed error handling with the underlying
+   access method result codes available to callers when error occur. Also need
+   to handle any ABENDs during writes and catch them so the whole server job
+   doesn't crash. Might also be good to stage incoming records in a temporary
+   dataset until we successfully receive all of them from the client before we
+   open (and therefore overwrite) the existing dataset, so an error receiving
+   records mid-job won't corrupt the old dataset.
  * Get job status and job output (as far as I can tell from some other
    software on MVS 3.8, the only way to do this is to read the SYS1.HASPCKPT
    dataset directly...I've not found any documentation for the format of the

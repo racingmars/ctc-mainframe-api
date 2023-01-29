@@ -10,6 +10,7 @@ package ctcapi
 // https://github.com/racingmars/ctc-mainframe-api/
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"regexp"
@@ -459,6 +460,187 @@ func (c *ctcapi) Submit(jcl []string) (string, error) {
 
 	log.Debug().Msgf("Submit(): job number is %s", jobnum)
 	return jobnum, nil
+}
+
+func (c *ctcapi) Write(dsn string, inputds []string) error {
+	// Confirm we have some records
+	if len(inputds) < 1 {
+		err := fmt.Errorf("Data must contain at least 1 record")
+		log.Debug().Err(err).Msg("invalid data in Submit")
+		return err
+	}
+
+	if !dsnameOptionalMemberRegex.MatchString(dsn) {
+		return fmt.Errorf("dataset name is invalid")
+	}
+
+	matches := dsnameOptionalMemberRegex.FindStringSubmatch(dsn)
+	pdsName := matches[1]
+	mbrName := matches[2]
+
+	if len(pdsName) > 44 {
+		return fmt.Errorf("dataset name too long; got %d characters "+
+			"but needs to be 44 or fewer", len(pdsName))
+	}
+	if len(mbrName) > 8 {
+		return fmt.Errorf("member name too long; got %d characters "+
+			"but needs to be 8 or fewer", len(mbrName))
+	}
+
+	// The dataset name must be 44 characters, padded with (EBCDIC) spaces.
+	pdsEbcdic := ctc.StoE(strings.ToUpper(pdsName))
+	pdsPadded := make([]byte, 44)
+	for i := range pdsPadded {
+		pdsPadded[i] = 0x40
+	}
+	copy(pdsPadded, pdsEbcdic)
+
+	// The member name must be 8 characters, padded with (EBCDIC) spaces.
+	mbrEbcdic := ctc.StoE(strings.ToUpper(mbrName))
+	mbrPadded := make([]byte, 8)
+	for i := range mbrPadded {
+		mbrPadded[i] = 0x40
+	}
+	copy(mbrPadded, mbrEbcdic)
+
+	c.ctcMutex.Lock()
+	defer c.ctcMutex.Unlock()
+
+	log.Debug().Hex("pds", pdsEbcdic).Msgf("writing dataset '%s'",
+		pdsName)
+	if len(mbrName) > 0 {
+		log.Debug().Hex("member", mbrEbcdic).Msgf("writing member '%s'",
+			mbrName)
+	}
+
+	// Complete input is the 44-byte DS name followed by 8-byte member
+	pdsPadded = append(pdsPadded, mbrPadded...)
+
+	if err := c.sendCommand(opWrite, pdsPadded); err != nil {
+		log.Error().Err(err).Msg("sendCommand() error in Write()")
+		return err
+	}
+
+	log.Debug().Msg("Write(): reading initial response")
+	data, err := c.ctcdata.SenseRead()
+	if err != nil {
+		return fmt.Errorf("Write(): couldn't perform SenseRead(): %v", err)
+	}
+	if len(data) != 8 {
+		return fmt.Errorf("Write(): got %d bytes of data, expected 8",
+			len(data))
+	}
+
+	resultCode := binary.BigEndian.Uint32(data[0:4])
+	if resultCode != 0 {
+		log.Info().Msgf("Write(): unsuccessful result code: %02x",
+			resultCode)
+		return fmt.Errorf("unsuccessful result code: %02x",
+			resultCode)
+	}
+	lrecl := binary.BigEndian.Uint32(data[4:8])
+
+	// Confirm all lines are <=lrecl characters
+	var lengthErr error
+	for i := range inputds {
+		if len(inputds[i]) > int(lrecl) {
+			lengthErr = fmt.Errorf(
+				"line %d of input is %d characters; must be <= %d",
+				i+1, len(inputds[i]), lrecl)
+			log.Debug().Err(err).Msg("invalid data length in Write()")
+		}
+	}
+
+	var proceedCommand int32
+	var numLines int32
+
+	if lengthErr != nil {
+		proceedCommand = 1
+	}
+	numLines = int32(len(inputds))
+
+	var initialRespBuf bytes.Buffer
+	binary.Write(&initialRespBuf, binary.BigEndian, proceedCommand)
+	binary.Write(&initialRespBuf, binary.BigEndian, numLines)
+
+	log.Debug().Msgf("Sending intent to proceed %02x with %d records",
+		proceedCommand, numLines)
+	if err := c.ctccmd.NakedWrite(initialRespBuf.Bytes()); err != nil {
+		return err
+	}
+
+	data, err = c.ctcdata.SenseRead()
+	if err != nil {
+		return fmt.Errorf("Write(): couldn't perform SenseRead() after "+
+			"intent to proceed: %v", err)
+	}
+	resultCode = binary.BigEndian.Uint32(data[0:4])
+	if resultCode != 0 {
+		log.Info().Msgf("Write(): unsuccessful result code after intent to "+
+			"proceed: %02x", resultCode)
+		return fmt.Errorf("unsuccessful result code after intend to "+
+			"proceed: %02x", resultCode)
+	}
+
+	log.Debug().Msgf("sending write command with %d records", len(inputds))
+
+	for i, line := range inputds {
+		// convert input line to a right-space-padded lrecl character record.
+		// (we already verified earlier that all lines are <= lcrecl characters)
+		e := ctc.StoE(line)
+		padded := make([]byte, lrecl)
+		for j := range padded {
+			padded[j] = 0x40
+		}
+		copy(padded, e)
+
+		log.Debug().Msg("Write(): sending record")
+		if err := c.ctccmd.ControlWrite(padded); err != nil {
+			return fmt.Errorf("error writing record: %v", err)
+		}
+
+		// We also expect a response on the data channel
+		log.Debug().Msg("Write(): reading response")
+		data, err := c.ctcdata.SenseRead()
+		if err != nil {
+			return fmt.Errorf("error reading record response: %v", err)
+		}
+
+		if len(data) != 8 {
+			return fmt.Errorf("got %d response length, expected 8",
+				len(data))
+		}
+		log.Debug().Msgf("Write(): got response %08x after record %d",
+			data, i)
+		resultCode := binary.BigEndian.Uint32(data[0:4])
+		if resultCode != 0 {
+			errmsg := fmt.Errorf(
+				"Write(): unsuccessful result code %08x after record %d",
+				data, i)
+			log.Error().Msgf("%v", errmsg)
+			return errmsg
+		}
+	}
+
+	log.Debug().Msg("Write(): getting final result")
+	data, err = c.ctcdata.SenseRead()
+	if err != nil {
+		return fmt.Errorf("error reading final result: %v", err)
+	}
+
+	if len(data) != 8 {
+		return fmt.Errorf("unexpected final response length: %d",
+			len(data))
+	}
+	resultCode = binary.BigEndian.Uint32(data[0:4])
+	if resultCode != 0 {
+		errmsg := fmt.Errorf("Write(): unexpected final response code %08x",
+			data[0:4])
+		log.Error().Msgf("%v", errmsg)
+		return err
+	}
+
+	return nil
 }
 
 // Quit will instruct the CTC server job on the MVS side to quit.
