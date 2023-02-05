@@ -327,6 +327,12 @@ func (c *ctcapi) Read(dsn string, raw bool) ([][]byte, error) {
 		return nil, fmt.Errorf("unsuccessful result code: %02x/%02x",
 			resultCode, additionalCode)
 	}
+	fixedCode := binary.BigEndian.Uint32(data[4:8])
+	fixed := false
+	if fixedCode > 0 {
+		fixed = true
+	}
+	log.Debug().Bool("fixed", fixed).Send()
 
 	var entries [][]byte
 	var i int
@@ -343,9 +349,33 @@ func (c *ctcapi) Read(dsn string, raw bool) ([][]byte, error) {
 			break
 		}
 
+		if !fixed {
+			// for variable-length records, we get the record length and
+			// trim off the Record Descriptor Word (RDW) (see page 24-25
+			// of GC26-3874-0, OS/VS2 MVS Data Management Services Guide).
+			if len(data) < 4 {
+				log.Error().Msgf("Invalid record length for a "+
+					"variable-length record: %d", len(data))
+				continue
+			}
+			recl := binary.BigEndian.Uint16(data[0:2])
+			if len(data) < int(recl) {
+				log.Error().Msgf("Invalid record length for a "+
+					"variable-length record that indicates %d length: %d",
+					recl, len(data))
+				continue
+			}
+			// recl includes the 4-byte RDW
+			data = data[0:recl]
+		}
+
 		if raw {
 			entries = append(entries, data)
 		} else {
+			if !fixed {
+				// Trim the RDW
+				data = data[4:]
+			}
 			record := strings.TrimRight(ctc.EtoS(data), " ")
 			entries = append(entries, []byte(record))
 		}

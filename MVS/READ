@@ -1,7 +1,7 @@
 ***********************************************************************
 * MVS SERVICES OVER CTC - READ Command (0x03)                         *
 *                                                                     *
-* Copyright 2022 Matthew R. Wilson <mwilson@mattwilson.org>           *
+* Copyright 2022-2023 Matthew R. Wilson <mwilson@mattwilson.org>      *
 *                                                                     *
 * This file is part of CTC Mainframe API. CTC Mainframe API is free   *
 * software: you can redistribute it and/or modify it under the terms  *
@@ -66,8 +66,24 @@ CHKPS    NI    38(R1),X'40'     ...yes, check that DSORG is PS
          B     CHKORG              ...yes, DSORG=PS
 CHKPO    NI    38(R1),X'02'     Check that DSORG is PO
          BZ    FMTERR           ...no, organization of dataset is unsup
-CHKORG   NI    40(R1),X'80'     Fixed recln?
-         BZ    FMTERR           ...no, dataset is unsupported
+CHKORG   L     R5,40(R1)        Load recfm into R5
+         N     R5,RECFMSK       Mask out the non-RECFM bits
+         SRL   R5,24            Shift top byte into last byte in R5
+         LR    R6,R5            R6=R5
+         LA    R7,X'80'         Fixed recln
+         NR    R6,R7            R6&0x80
+         BNZ   ORGF             Record length is fixed
+         LR    R6,R5            R6=R5 (restore recfm byte)
+         LA    R7,X'40'         Variable recln
+         NR    R6,R7            R6&0x40
+         BNZ   ORGV             Record length is variable
+         B     FMTERR           Something else... like U
+ORGF     LA    R7,1             R7 = 1
+         ST    R7,FIXED         FIXED = 1
+         B     CHKDONE
+ORGV     LA    R7,0             R7 = 0
+         ST    R7,FIXED         FIXED = 0
+CHKDONE  EQU   *
 *
 * At this point, we think we have a dataset that is supported and
 * matches the user's request.
@@ -288,7 +304,8 @@ SKIPMBR  EQU   *
 *
 * Send the initial response
          LA    R9,0             Just hard-code an "ok" response
-         ST    R9,RESPONSE
+         ST    R9,RESPCODE
+         MVC   RESPCOD2,FIXED   Tell the server if fixed recln
          LA    R9,DSRCCW1       Load address of DSRCCW1 to R9
          ST    R9,IOBCCWAD      Point our IOB to our WRITE CCW
          L     R9,CTCDTAAD      Load address of CTCDATA DCB to R9
@@ -369,6 +386,7 @@ CTCDTAAD DS    F
 CMDINAD  DS    F
 *
 ***** Storage and CCWs for MBRLIST command
+FIXED    DS    F                Non-zero means fixed record length
 * Initial response
 RESPONSE DS    0F
 RESPCODE DS    F
@@ -435,6 +453,7 @@ EXCPECB  DS    F
 * Utility variables
          DS    0F
 CMDLNMSK DC    X'00FFFF00'      Mask to get the param length
+RECFMSK  DC    X'FF000000'      Mask to get the recfm
          PRINT NOGEN
          IEFZB4D0 ,             DYNALLOC DSECT
          IEFZB4D2 ,             DYNALLOC symbolic names

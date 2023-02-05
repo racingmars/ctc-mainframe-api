@@ -149,8 +149,11 @@ type of application/octet-stream with the data from the mainframe left
 untouched.
 
 Sequential datasets (e.g. `HLQ.DS1`) and members of partitioned datasets (e.g.
-`HLQ.DS2(MEMBER)`) are supported. However, only datasets with fixed record
-length (F or FB) are supported.
+`HLQ.DS2(MEMBER)`) are supported. Datasets with fixed or variable record
+length (F, FB, V, or VB) are supported.
+
+When using raw EBCDIC mode, the output from datasets with variable record
+length will include the 4-byte Record Descriptor Word.
 
 ### Submit job
 
