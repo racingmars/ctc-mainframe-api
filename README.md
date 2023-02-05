@@ -177,9 +177,15 @@ __EOF__
 
 `POST /api/write/<dsn>`
 
-`<dsn>` is the fully-qualified dataset name (optionally including a member name if the dataset is a PDS) to write to. The dataset **must** already be allocated, and it must be a non-VSAM, fixed-record-length PO or PS dataset.
+`<dsn>` is the fully-qualified dataset name (optionally including a member
+name if the dataset is a PDS) to write to. The dataset **must** already be
+allocated, and it must be a non-VSAM, fixed-record-length PO or PS dataset.
 
-The request body consists of the records to place into the dataset. All existing records in the dataset will be deleted and the new version of the dataset will include only the records provided in the API call. Each record must be less than or equal to the number of characters that the dataset LRECL is allocated with.
+The request body consists of the records to place into the dataset. All
+existing records in the dataset will be deleted and the new version of the
+dataset will include only the records provided in the API call. Each record
+must be less than or equal to the number of characters that the dataset LRECL
+is allocated with.
 
 For example, to write to a dataset with cURL:
 
@@ -190,7 +196,8 @@ This dataset contents was written via the API call named "write".
 __EOF__
 ```
 
-This, of course, assumes that HERC01.MEMO is already allocated as a F or FB, PO dataset with an LRECL >= 65 (to handle the longest line of the input data).
+This, of course, assumes that HERC01.MEMO is already allocated as a F or FB,
+PO dataset with an LRECL >= 65 (to handle the longest line of the input data).
 
 ### Quit
 
